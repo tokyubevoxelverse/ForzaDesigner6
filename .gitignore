@@ -1,7 +1,8 @@
 # PyInstaller / build artifacts
 build/
 dist/
-*.spec
+# .spec files are checked in (ForzaAbyssPainter.spec) — only ignore generated ones.
+*.spec~
 
 # Python
 __pycache__/

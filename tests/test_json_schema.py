@@ -3,9 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from fd6.io.json_schema import FD6Document, FD6_FORMAT, FD6_VERSION
-from fd6.io.exporter import save_json, load_json
-from fd6.shapegen.shapes import RotatedEllipse
+from forza_abyss_painter.io.json_schema import FD6Document, FD6_FORMAT, FD6_VERSION
+from forza_abyss_painter.io.exporter import save_json, load_json
+from forza_abyss_painter.shapegen.shapes import RotatedEllipse
 
 
 def test_document_roundtrip(tmp_path: Path):

@@ -1,4 +1,4 @@
-from fd6.inject.pattern_scan import find_pattern, find_pattern_all, compile_pattern
+from forza_abyss_painter.inject.pattern_scan import find_pattern, find_pattern_all, compile_pattern
 
 
 def test_find_exact():

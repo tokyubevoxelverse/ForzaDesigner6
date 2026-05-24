@@ -3,7 +3,7 @@ import random
 import numpy as np
 import pytest
 
-from fd6.shapegen.shapes import (
+from forza_abyss_painter.shapegen.shapes import (
     Ellipse, RotatedEllipse, Circle, Rectangle, RotatedRectangle, Triangle,
     SHAPE_REGISTRY, random_shape, shape_from_json,
 )

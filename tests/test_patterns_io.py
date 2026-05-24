@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from fd6.inject.patterns_io import (
+from forza_abyss_painter.inject.patterns_io import (
     FieldSpec, PatternEntry, PatternsFile, ShapeStruct,
     load_patterns, save_patterns, has_usable_patterns,
 )

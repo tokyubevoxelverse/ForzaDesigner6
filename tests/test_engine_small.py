@@ -1,9 +1,9 @@
 import numpy as np
 import pytest
 
-from fd6.shapegen.engine import Engine, EngineConfig
-from fd6.shapegen.profile import Profile
-from fd6.shapegen.scoring import rms_error
+from forza_abyss_painter.shapegen.engine import Engine, EngineConfig
+from forza_abyss_painter.shapegen.profile import Profile
+from forza_abyss_painter.shapegen.scoring import rms_error
 
 
 def _make_target(size: int = 32) -> np.ndarray:

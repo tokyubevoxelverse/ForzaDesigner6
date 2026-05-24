@@ -9,7 +9,7 @@ layout). We test the helpers that don't require an attached process:
 
 import struct
 
-from fd6.inject.fh6_injector import (
+from forza_abyss_painter.inject.fh6_injector import (
     _is_user_ptr,
     _pack_color,
     patterns_are_populated,
