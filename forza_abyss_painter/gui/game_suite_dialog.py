@@ -97,7 +97,7 @@ class GameSuiteDialog(QDialog):
         root.addWidget(header)
 
         sub = QLabel(
-            "Pick your target game family. FD6 remembers your choice — you can "
+            "Pick your target game family. Forza Abyss Painter remembers your choice — you can "
             "switch later from View → Customizations → Change Game Suite."
         )
         sub.setWordWrap(True)

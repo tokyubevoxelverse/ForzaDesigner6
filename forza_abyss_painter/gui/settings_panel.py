@@ -88,7 +88,7 @@ class SettingsPanel(QWidget):
         self.max_threads = QSpinBox(); self.max_threads.setRange(0, 64); self.max_threads.setValue(0)
         self.max_threads.setToolTip(
             "How many CPU cores the generator uses in parallel. Leave at 0 to "
-            "let FD6 auto-pick a safe number based on your CPU and RAM. Only "
+            "let the app auto-pick a safe number based on your CPU and RAM. Only "
             "override this if you want to free up cores for something else "
             "while generation runs (e.g. set it to half your core count)."
         )
@@ -120,7 +120,7 @@ class SettingsPanel(QWidget):
         # Sticker mode toggle
         sticker_group = QGroupBox("Image options", self)
         sticker_group.setToolTip(
-            "How FD6 should handle source images. Affects only PNGs with "
+            "How the app should handle source images. Affects only PNGs with "
             "transparency — regular JPEG / PNG without alpha use the same "
             "code path either way."
         )
@@ -150,7 +150,7 @@ class SettingsPanel(QWidget):
         types_group = QGroupBox("Shape types", self)
         types_group.setToolTip(
             "Which shapes the generator is allowed to use. When more than one "
-            "is checked, FD6 rotates between them so each enabled type gets "
+            "is checked, the app rotates between them so each enabled type gets "
             "dedicated shape slots in the output."
         )
         tg_layout = QVBoxLayout(types_group)

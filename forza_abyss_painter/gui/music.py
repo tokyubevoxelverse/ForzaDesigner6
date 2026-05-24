@@ -42,7 +42,7 @@ class MusicPlayer(QObject):
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
-        self._settings = QSettings("FD6", "ForzaDesigner6")
+        self._settings = QSettings("ForzaAbyssPainter", "Forza Abyss Painter")
         self._settings.beginGroup(SETTINGS_GROUP)
 
         self._audio = QAudioOutput(self)

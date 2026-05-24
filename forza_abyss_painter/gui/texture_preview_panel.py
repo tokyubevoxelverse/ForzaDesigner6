@@ -11,7 +11,7 @@ suite is active. Layout:
   └──────────────────────────────────────────┘
 
 Source view is left as-is (shows the uploaded image). Slot views below
-let users see exactly what FD6 will write into each ACC slot before
+let users see exactly what Forza Abyss Painter will write into each ACC slot before
 clicking Export.
 """
 

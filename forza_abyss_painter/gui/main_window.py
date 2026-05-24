@@ -270,7 +270,7 @@ class MainWindow(QMainWindow):
             "that downloads PNGs straight into the generation queue."
         )
         from PySide6.QtCore import QSettings as _QS
-        _cs = _QS("FD6", "Forza Designer 6")
+        _cs = _QS("ForzaAbyssPainter", "Forza Abyss Painter")
         _cs.beginGroup("customizations")
         _init_swap = _cs.value("swap_recents_with_image_searcher", False, type=bool)
         _cs.endGroup()
@@ -439,7 +439,7 @@ class MainWindow(QMainWindow):
         result = write_acc_livery(
             profile=cfg["profile"],
             car_model=cfg["car_model"],
-            team_name=cfg["team_name"] or f"FD6_{Path(self._current_path).stem}",
+            team_name=cfg["team_name"] or f"FAP_{Path(self._current_path).stem}",
             rgba=rgba,
             slot_filenames=slot_filenames,
             display_name=cfg["display_name"],
@@ -690,7 +690,7 @@ class MainWindow(QMainWindow):
             self._on_inject_json_path(self._loaded_json_path)
             return
         json_path, _ = QFileDialog.getOpenFileName(
-            self, "Pick shapes JSON to inject", "", "FD6 shapes (*.json);;All files (*)"
+            self, "Pick shapes JSON to inject", "", "Forza Abyss Painter shapes (*.json);;All files (*)"
         )
         if json_path:
             self._on_inject_json_path(Path(json_path))
@@ -730,7 +730,7 @@ class MainWindow(QMainWindow):
         )
 
     def _on_inject_json_path(self, json_path: Path) -> None:
-        """Inject the given FD6 shapes JSON into the running FH6 vinyl group.
+        """Inject the given shapes JSON into the running FH6 vinyl group.
         Opens a modal in-progress dialog (warns user not to touch FH6) and runs the
         injection in a background QThread. Status bar mirrors the same updates.
         """
@@ -844,7 +844,7 @@ class MainWindow(QMainWindow):
             )
             return
         dest, _ = QFileDialog.getSaveFileName(
-            self, "Save shapes JSON as…", self._last_finished_json.name, "FD6 shapes (*.json);;All files (*)"
+            self, "Save shapes JSON as…", self._last_finished_json.name, "Forza Abyss Painter shapes (*.json);;All files (*)"
         )
         if not dest:
             return
@@ -885,7 +885,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "FH6 Discovery Workflow",
-            "<p>Discovery is done from the command line, run from the FD6 project root:</p>"
+            "<p>Discovery is done from the command line, run from the project root:</p>"
             "<pre>"
             "python -m forza_abyss_painter.inject status\n"
             "python -m forza_abyss_painter.inject scan-float &lt;known sphere coord&gt;\n"
@@ -896,7 +896,7 @@ class MainWindow(QMainWindow):
             "python -m forza_abyss_painter.inject test-injector\n"
             "</pre>"
             "<p>The interactive parts (initial float discovery, struct field identification) "
-            "are done with an external memory-scanning tool of your choice — FD6 only consumes "
+            "are done with an external memory-scanning tool of your choice — the app only consumes "
             "the resulting AOB pattern and offsets.</p>"
             "<p>Use FH6 → Reload Patterns once you've saved a usable pattern; the Inject "
             "button will then enable.</p>"

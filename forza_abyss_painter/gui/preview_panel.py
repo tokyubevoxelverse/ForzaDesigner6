@@ -40,7 +40,7 @@ class PreviewPanel(QWidget):
         self.preview_view.clear_image()
         self.progress.setValue(0)
         self.status_label.setText(
-            "Idle — give the FD6 engine a moment to start. "
+            "Idle — give the engine a moment to start. "
             "First-shape startup can take anywhere from a few seconds to several "
             "minutes depending on profile (random/mutated samples) and image size."
         )

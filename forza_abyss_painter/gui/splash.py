@@ -15,7 +15,7 @@ def _splash_video_path() -> Path | None:
     """Find SplashScreen.mp4 — works both running from source and as PyInstaller-bundled EXE.
 
     When PyInstaller builds with --onefile, bundled resources land in sys._MEIPASS at runtime.
-    Otherwise look in the FD6 project root.
+    Otherwise look in the project root.
     """
     candidates: list[Path] = []
     if hasattr(sys, "_MEIPASS"):

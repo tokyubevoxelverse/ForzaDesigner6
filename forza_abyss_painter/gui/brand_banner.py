@@ -19,17 +19,17 @@ from PySide6.QtWidgets import (
 )
 
 
-TOKYUBE_URL = "https://tokyube.com"
+WHYKUSANAGI_URL = "https://whykusanagi.xyz"
 TUTORIAL_URL = "https://youtu.be/8LGvE7O9aeg"
 SUBSCRIBE_URL = "https://www.youtube.com/@DaMostPalone?sub_confirmation=1"
-DISCORD_INVITE_URL = "https://discord.gg/PJFWdykGmS"
-JBA_URL = "https://tokyubevoxelverse.github.io/gbajs4/"
+TWITCH_URL = "https://twitch.tv/whykusanagi"
+PROJECT_URL = "https://github.com/whykusanagi/forza-abyss-painter"
 
 
 def _bundle_root() -> Path:
     if hasattr(sys, "_MEIPASS"):
         return Path(sys._MEIPASS)  # type: ignore[attr-defined]
-    return Path(__file__).resolve().parent.parent.parent  # FD6/
+    return Path(__file__).resolve().parent.parent.parent  # repo root
 
 
 def badge_path(filename: str) -> Path | None:
@@ -64,11 +64,11 @@ class BrandBanner(QWidget):
 
     MARGIN = 12
     # Height accommodates four CTA buttons stacked above the icon/title row:
-    #   row 1: tokyube.com (rainbow)
-    #   row 2: JBA Online GameBoy Emulator (tan -> brown)
+    #   row 1: whykusanagi.xyz (rainbow)
+    #   row 2: GitHub: forza-abyss-painter (tan -> brown)
     #   row 3: Tutorial / Trailer (YouTube red)
-    #   row 4: Join the Imagineers (Discord orange)
-    #   row 5: icon + Forza Designer 6 title
+    #   row 4: Watch on Twitch (orange CTA, same color theme as the Discord button it replaced)
+    #   row 5: icon + Forza Abyss Painter title
     BANNER_HEIGHT = 220
     BANNER_WIDTH = 260
     PILL_SIZE = 40
@@ -102,16 +102,16 @@ class BrandBanner(QWidget):
         self.panel.setCursor(Qt.PointingHandCursor)
         self.panel.setFixedSize(self.BANNER_WIDTH, self.BANNER_HEIGHT)
 
-        # Vertical panel layout: [tokyube CTA] [discord CTA] [icon + title row]
+        # Vertical panel layout: [whykusanagi CTA] [github CTA] [twitch CTA] [icon + title row]
         outer = QVBoxLayout(self.panel)
         outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(6)
 
-        # ── CTA 1: tokyube.com (rainbow gradient, white text) ────────────────
-        self.tokyube_btn = QPushButton("tokyube.com", self.panel)
-        self.tokyube_btn.setCursor(Qt.PointingHandCursor)
-        self.tokyube_btn.setFixedHeight(self.CTA_HEIGHT)
-        self.tokyube_btn.setStyleSheet(
+        # ── CTA 1: whykusanagi.xyz (rainbow gradient, white text) ────────────
+        self.whyk_btn = QPushButton("whykusanagi.xyz", self.panel)
+        self.whyk_btn.setCursor(Qt.PointingHandCursor)
+        self.whyk_btn.setFixedHeight(self.CTA_HEIGHT)
+        self.whyk_btn.setStyleSheet(
             "QPushButton {"
             " background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
             "  stop:0 #ff0000, stop:0.166 #ff8800, stop:0.333 #ffff00,"
@@ -121,21 +121,21 @@ class BrandBanner(QWidget):
             " border: 1px solid #000; border-radius: 6px; padding: 0 10px; }"
             "QPushButton:hover { border-color: #fff; }"
         )
-        self.tokyube_btn.setToolTip("Open tokyube.com")
-        self.tokyube_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(TOKYUBE_URL)))
-        outer.addWidget(self.tokyube_btn)
+        self.whyk_btn.setToolTip("Open whykusanagi.xyz")
+        self.whyk_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(WHYKUSANAGI_URL)))
+        outer.addWidget(self.whyk_btn)
 
-        # ── CTA 2: JBA Online GameBoy Emulator (tan -> brown, sand text) ─────
-        self.jba_btn = QPushButton("  JBA Online GameBoy Emulator", self.panel)
-        self.jba_btn.setCursor(Qt.PointingHandCursor)
-        self.jba_btn.setFixedHeight(self.CTA_HEIGHT)
-        jba_logo = badge_path("JavaBoyLogo.png")
+        # ── CTA 2: GitHub project link (tan -> brown, sand text) ────────────
+        self.project_btn = QPushButton("  GitHub: forza-abyss-painter", self.panel)
+        self.project_btn.setCursor(Qt.PointingHandCursor)
+        self.project_btn.setFixedHeight(self.CTA_HEIGHT)
+        jba_logo = None   # JBA emulator icon removed; button is now a GitHub link with no icon
         if jba_logo:
             jba_pix = QPixmap(str(jba_logo))
             if not jba_pix.isNull():
-                self.jba_btn.setIcon(QIcon(jba_pix.scaled(20, 20, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
-                self.jba_btn.setIconSize(QSize(20, 20))
-        self.jba_btn.setStyleSheet(
+                self.project_btn.setIcon(QIcon(jba_pix.scaled(20, 20, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
+                self.project_btn.setIconSize(QSize(20, 20))
+        self.project_btn.setStyleSheet(
             "QPushButton {"
             " background: qlineargradient(x1:0, y1:0, x2:1, y2:1,"
             "  stop:0 #e6c79e, stop:0.5 #a47148, stop:1 #5b3a1e);"
@@ -143,9 +143,9 @@ class BrandBanner(QWidget):
             " border: 1px solid #3d2412; border-radius: 6px; padding: 0 10px; text-align: left; }"
             "QPushButton:hover { border-color: #fff8e1; }"
         )
-        self.jba_btn.setToolTip(f"Play GameBoy / GameBoy Advance games in your browser ({JBA_URL})")
-        self.jba_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(JBA_URL)))
-        outer.addWidget(self.jba_btn)
+        self.project_btn.setToolTip(f"Open the GitHub project ({PROJECT_URL})")
+        self.project_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(PROJECT_URL)))
+        outer.addWidget(self.project_btn)
 
         # ── CTA 3: Tutorial / Trailer (YouTube red, white play glyph) ────────
         self.tutorial_btn = QPushButton("▶  Tutorial / Trailer", self.panel)
@@ -160,16 +160,16 @@ class BrandBanner(QWidget):
             "QPushButton:hover { border-color: #fff; }"
         )
         self.tutorial_btn.setToolTip(
-            "Watch the FD6 trailer (opens the video, plus a subscribe prompt in a second tab)"
+            "Watch the Forza Abyss Painter trailer (opens the video, plus a subscribe prompt in a second tab)"
         )
         self.tutorial_btn.clicked.connect(self._on_tutorial_clicked)
         outer.addWidget(self.tutorial_btn)
 
-        # ── CTA 3: Join the Imagineers (matches site .btn-discord orange) ────
-        self.discord_btn = QPushButton("Join the Imagineers", self.panel)
-        self.discord_btn.setCursor(Qt.PointingHandCursor)
-        self.discord_btn.setFixedHeight(self.CTA_HEIGHT)
-        self.discord_btn.setStyleSheet(
+        # ── CTA 3: Watch on Twitch (matches site .btn-discord orange) ───────
+        self.twitch_btn = QPushButton("Watch on Twitch"), self.panel)
+        self.twitch_btn.setCursor(Qt.PointingHandCursor)
+        self.twitch_btn.setFixedHeight(self.CTA_HEIGHT)
+        self.twitch_btn.setStyleSheet(
             "QPushButton {"
             " background: qlineargradient(x1:0, y1:0, x2:1, y2:1,"
             "  stop:0 #ffd9a8, stop:0.4 #ff8c1a, stop:1 #b35400);"
@@ -177,9 +177,9 @@ class BrandBanner(QWidget):
             " border: 1px solid #6b3000; border-radius: 6px; padding: 0 10px; }"
             "QPushButton:hover { border-color: #fff; }"
         )
-        self.discord_btn.setToolTip(f"Open Discord invite ({DISCORD_INVITE_URL})")
-        self.discord_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(DISCORD_INVITE_URL)))
-        outer.addWidget(self.discord_btn)
+        self.twitch_btn.setToolTip(f"Open the Twitch channel ({TWITCH_URL})")
+        self.twitch_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(TWITCH_URL)))
+        outer.addWidget(self.twitch_btn)
 
         # ── Row 3: icon + title (existing) ───────────────────────────────────
         bottom_row = QHBoxLayout()
@@ -210,7 +210,7 @@ class BrandBanner(QWidget):
         self.pill = QPushButton(self)
         self.pill.setFixedSize(self.PILL_SIZE, self.PILL_SIZE)
         self.pill.setCursor(Qt.PointingHandCursor)
-        self.pill.setToolTip("Show FD6 banner")
+        self.pill.setToolTip("Show Forza Abyss Painter banner")
         self.pill.setStyleSheet(
             "QPushButton { background: rgba(20, 20, 24, 230); border: 1px solid #333; border-radius: 20px; }"
             "QPushButton:hover { background: rgba(30, 30, 36, 240); border-color: #555; }"

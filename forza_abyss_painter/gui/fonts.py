@@ -26,7 +26,7 @@ DEFAULT_POINT_SIZE = 10
 def _bundle_root() -> Path:
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         return Path(sys._MEIPASS)  # type: ignore[attr-defined]
-    return Path(__file__).resolve().parent.parent.parent  # FD6/
+    return Path(__file__).resolve().parent.parent.parent  # repo root
 
 
 def _fonts_dir() -> Path:

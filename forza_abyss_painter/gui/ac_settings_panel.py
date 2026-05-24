@@ -105,7 +105,7 @@ class ACSettingsPanel(QWidget):
         self.team_name = QLineEdit(self)
         self.team_name.setPlaceholderText("e.g. MyAwesomeLivery")
         self.team_name.setToolTip(
-            "What to name the livery folder FD6 creates under "
+            "What to name the livery folder Forza Abyss Painter creates under "
             "Documents\\Assetto Corsa Competizione\\Customs\\Liveries\\. "
             "ACC reads each folder as one custom livery — pick anything that's "
             "meaningful to you (no spaces or special characters)."

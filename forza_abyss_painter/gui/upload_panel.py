@@ -41,7 +41,7 @@ class UploadPanel(QWidget):
         json_row = QHBoxLayout()
         self.upload_json_btn = QPushButton("Upload JSON…")
         self.upload_json_btn.setToolTip(
-            "Load a previously-generated FD6 shapes JSON and preview it in the canvas. "
+            "Load a previously-generated shapes JSON and preview it in the canvas. "
             "Click 'Inject into FH6' afterwards when you're ready to push it into the game."
         )
         self.upload_json_btn.clicked.connect(self._on_upload_json_clicked)
@@ -99,7 +99,7 @@ class UploadPanel(QWidget):
     def _on_upload_clicked(self) -> None:
         exts = " ".join(f"*{e}" for e in sorted(SUPPORTED_EXTS))
         paths, _ = QFileDialog.getOpenFileNames(
-            self, "Pick image(s) for FD6", "", f"Images ({exts});;All files (*)"
+            self, "Pick image(s)", "", f"Images ({exts});;All files (*)"
         )
         if paths:
             self._emit([Path(p) for p in paths])
@@ -126,7 +126,7 @@ class UploadPanel(QWidget):
 
     def _on_upload_json_clicked(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Pick FD6 shapes JSON to load for preview", "", "FD6 shapes (*.json);;All files (*)"
+            self, "Pick shapes JSON to load for preview", "", "Forza Abyss Painter shapes (*.json);;All files (*)"
         )
         if path:
             self.json_loaded.emit(Path(path))
