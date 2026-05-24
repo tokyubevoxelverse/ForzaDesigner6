@@ -166,7 +166,7 @@ def _resolve_rgb_closed_form(geom, target, alpha_mask_f, h, w):
 
 
 def joint_polish(shapes_json, target, alpha_t, alpha_mask_f, edge_weight, canvas_init,
-                 h, w, steps, lr=1.5, chunk=200, progress=False, lock_alpha=False,
+                 h, w, steps, lr=1.5, chunk=200, progress=False, lock_alpha=True,
                  purity_penalty=0.0, freeze_geometry=True):
     """Jointly refine all shapes. Returns (refined_shapes_json, final_canvas_u8_numpy).
 
