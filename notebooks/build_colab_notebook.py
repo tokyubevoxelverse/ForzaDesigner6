@@ -183,6 +183,15 @@ RANDOM_SAMPLES     = {random_samples}  # seed candidates/shape. forza-painter's 
                             # it affordable; push higher to chase parity.
 MAX_RESOLUTION     = {max_resolution}   # matched to NUM_SHAPES (~sqrt(N)*28 px long side).
                             # Higher wastes compute on detail the shape budget can't render.
+UPLOAD_MAX_LONG_SIDE = 720  # HARD SAFETY CAP on input image's long side. Applied at upload
+                            # time, BEFORE the engine sees the image. Effective resize ceiling
+                            # = min(MAX_RESOLUTION, UPLOAD_MAX_LONG_SIDE). Even on a 102 GB
+                            # Blackwell 6000 we hit OOM at native resolutions >1600 because
+                            # the bbox-local scorer's per-candidate crop area scales with
+                            # max(rx,ry)² ~= (canvas_long_side/8)² — 1600² is 4× the cost
+                            # of 720² and pushes K=6144 candidates past the VRAM budget.
+                            # 720 keeps every preset comfortably under 20 GB peak. Raise
+                            # ONLY if you have measured your GPU's headroom and accept OOM risk.
 SEED               = 42     # 0 = time-based
 STICKER_MODE       = True   # True if your image has transparency to preserve
 ALPHA_THRESHOLD    = {alpha_threshold}      # 0 = keep soft alpha. If you see a WHITE HALO around the figure
@@ -374,7 +383,7 @@ if _long > MAX_RESOLUTION:
 '''
 
 CELL_RUN = '''# --- Run ---
-def _load_image_bytes(name, raw, max_resolution, sticker):
+def _load_image_bytes(name, raw, max_resolution, sticker, upload_cap=720):
     img = Image.open(io.BytesIO(raw))
     has_alpha = img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info)
     alpha_mask = None
@@ -392,8 +401,19 @@ def _load_image_bytes(name, raw, max_resolution, sticker):
         img = bg
     else:
         img = img.convert("RGB")
-    if max(img.size) > max_resolution:
-        scale = max_resolution / max(img.size)
+    # Apply the VRAM safety cap BEFORE the preset's max_resolution check. The bbox-local
+    # scorer's peak VRAM scales as K * (canvas_long_side / 8)^2 * 3 channels — quadratic in
+    # the long side. Even a 102 GB Blackwell 6000 OOMs above ~1600 long-side at K=6144;
+    # 720 keeps every production preset comfortably under 20 GB peak. Effective ceiling =
+    # min(preset's max_resolution, upload_cap). Setting upload_cap=0 disables the cap.
+    effective_max = max_resolution if upload_cap <= 0 else min(max_resolution, upload_cap)
+    original_long = max(img.size)
+    if original_long > effective_max:
+        if effective_max < max_resolution:
+            print(f"[upload cap] long side {original_long} > {effective_max} (safety cap; "
+                  f"preset max_resolution={max_resolution}). Auto-resizing to {effective_max}.")
+    if max(img.size) > effective_max:
+        scale = effective_max / max(img.size)
         new_size = (max(1, int(img.size[0] * scale)), max(1, int(img.size[1] * scale)))
         img = img.resize(new_size, Image.LANCZOS)
         if alpha_mask is not None:
@@ -437,7 +457,8 @@ def _load_image_bytes(name, raw, max_resolution, sticker):
 
 
 target_rgb, alpha_mask = _load_image_bytes(
-    SOURCE_IMAGE_NAME, SOURCE_IMAGE_BYTES, MAX_RESOLUTION, STICKER_MODE
+    SOURCE_IMAGE_NAME, SOURCE_IMAGE_BYTES, MAX_RESOLUTION, STICKER_MODE,
+    upload_cap=UPLOAD_MAX_LONG_SIDE,
 )
 h, w = target_rgb.shape[:2]
 mode_tag = "sticker" if STICKER_MODE else "opaque"
