@@ -46,7 +46,9 @@ beyond the pre-installed Colab stack.
 1. Run the *Setup* cell (verifies CUDA, defines the engine).
 2. Run the *Upload* cell and pick a PNG/JPG. For stickers (RGBA with transparency you want
    preserved), set `STICKER_MODE=True` in the *Run* cell.
-3. Run the *Run* cell — it generates shapes and writes `<stem>.json` + `<stem>_render.png`.
+3. Run the *Run* cell — it generates shapes and writes `<stem>_<NUM_SHAPES>.json`
+   + `<stem>_<NUM_SHAPES>_render.png` so you can tell at a glance which budget tier this
+   JSON belongs to (eg `nikke_rupee_3000.json` = high-detail vs `nikke_rupee_400.json` = lineart).
 4. The result is displayed inline. Download the JSON to ship to your Windows FH6 injector.
 
 **If you hit a CUDA OOM:** run the **Cleanup** cell (Section 3) and lower `RANDOM_SAMPLES`
@@ -487,10 +489,16 @@ def _doc(shapes):
         "shapes": shapes,
     }
 
+# Output naming convention: include NUM_SHAPES (the shape budget) in every filename so
+# users can identify quality level at a glance — eg "nikke_rupee_3000.json" is a high-detail
+# render vs "nikke_rupee_400.json" for a lineart-density render. Budget is the planned shape
+# count even if the final actual count is slightly lower (sticker constraints can exhaust).
+_BUDGET_TAG = str(NUM_SHAPES)
+
 # Checkpoint to Drive during the run so a session reset mid-run still leaves a recoverable
 # JSON. Writes greedy progress every CHECKPOINT_EVERY shapes.
 def _checkpoint(shape_idx, shapes_so_far):
-    p = out_dir / f"{stem}_{shape_idx}.json"
+    p = out_dir / f"{stem}_{_BUDGET_TAG}_ckpt_{shape_idx}.json"
     p.write_text(json.dumps(_doc(shapes_so_far)))
 
 t0 = time.perf_counter()
@@ -501,9 +509,10 @@ shapes_json, final_canvas = run_gpu(
 elapsed = time.perf_counter() - t0
 
 # Persist FINAL outputs to Drive IMMEDIATELY — before any variable reset / disconnect can
-# lose them. This is the whole point of the Drive version.
-json_path = out_dir / f"{stem}.json"
-png_path = out_dir / f"{stem}_render.png"
+# lose them. This is the whole point of the Drive version. Filenames include the shape
+# budget (NUM_SHAPES) so 400/700/1000/3000-shape renders are distinguishable at a glance.
+json_path = out_dir / f"{stem}_{_BUDGET_TAG}.json"
+png_path = out_dir / f"{stem}_{_BUDGET_TAG}_render.png"
 json_path.write_text(json.dumps(_doc(shapes_json), indent=2))
 Image.fromarray(final_canvas, "RGB").save(png_path)
 
