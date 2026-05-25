@@ -19,14 +19,19 @@ Cancel mid-run cleanly terminates the subprocess (Phase 3 plumbing).
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame,
-    QHBoxLayout, QLabel, QLineEdit, QProgressBar, QPushButton, QVBoxLayout,
+    QHBoxLayout, QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton,
+    QVBoxLayout,
 )
+
+from forza_abyss_painter.gui.gpu_gen_worker import GpuGenWorker, build_run_config
+from forza_abyss_painter.runtime.torch_installer import embedded_python_exe
 
 
 # Local-GPU preset table. Mirrors the Colab notebook lineup but with
@@ -236,22 +241,169 @@ class GenerateLocallyDialog(QDialog):
         self.vram_info.setTextFormat(Qt.RichText)
 
     def _on_generate_clicked(self) -> None:
-        """Phase 3 stub. Real implementation: lock the form, show progress,
-        spawn a QThread worker that subprocess-invokes the embedded-Python
-        runtime running run_gpu with the chosen preset's settings, streams
-        progress through a Qt signal."""
+        """Lock the form, spawn the GPU subprocess via GpuGenWorker on a
+        QThread, route its IPC events through Qt signals to update the
+        progress bar + status label. On done: read the output JSON path
+        from the event, set self.output_path, accept the dialog.
+        On error: surface a modal, leave the dialog open so the user
+        can adjust + retry.
+        """
+        if not self.source_path:
+            return
+        preset = self.preset_combo.currentData()
+        out_path = self._resolve_output_path(preset)
+
+        # Write the IPC config alongside the source image so it's easy
+        # to find for post-mortem inspection if anything goes wrong.
+        config = build_run_config(
+            self.source_path, out_path, preset,
+            sticker_mode=False,   # TODO: tie to a sticker checkbox once added
+        )
+        config_path = self.source_path.parent / (
+            f".{self.source_path.stem}_gpu_config.json"
+        )
+        try:
+            config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        except OSError as exc:
+            QMessageBox.critical(
+                self, "Couldn't start",
+                f"Failed to write GPU config to {config_path}:\n\n"
+                f"{type(exc).__name__}: {exc}",
+            )
+            return
+
+        # Pre-flight: embedded python must exist. If the user is here it
+        # means the install path was confirmed by `prompt_install_or_use_existing`
+        # but a partial install (or someone manually deleting the runtime
+        # dir between sessions) can drop the binary while leaving the
+        # marker. Catch BEFORE spawning so the error message is precise.
+        py = embedded_python_exe()
+        if not py.exists():
+            QMessageBox.critical(
+                self, "GPU runtime missing",
+                f"Embedded Python not found at {py}.\n\n"
+                f"Re-run Tools → Generate shapes locally and accept the "
+                f"runtime install when prompted.",
+            )
+            return
+
+        self._lock_ui_for_run()
+        self._cancel_requested = False
+
+        # Build worker + move to a dedicated QThread so the GUI stays
+        # responsive while torch crunches. Hold both as instance attrs
+        # so they don't garbage-collect mid-run.
+        self._thread = QThread(self)
+        self._worker = GpuGenWorker(
+            embedded_python_exe=py,
+            config_path=config_path,
+        )
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.started.connect(self._on_worker_started)
+        # Treat fine-grained progress + checkpoint events identically for
+        # the progress bar — both carry (shape_count, total). The dialog
+        # doesn't currently surface checkpoint shape lists; future preview
+        # render would subscribe to the checkpoint signal specifically.
+        self._worker.progress.connect(self._on_worker_progress)
+        self._worker.checkpoint.connect(self._on_worker_progress)
+        self._worker.done.connect(self._on_worker_done)
+        self._worker.error.connect(self._on_worker_error)
+        self._worker.finished.connect(self._thread.quit)
+        self._worker.finished.connect(self._worker.deleteLater)
+        self._thread.finished.connect(self._thread.deleteLater)
+        self._thread.start()
+
+    # ----- worker-event slots (run on the GUI thread) -----
+
+    def _on_worker_started(self, cfg_summary: dict) -> None:
+        self.status_label.setText(
+            f"Running on GPU — preset: "
+            f"{cfg_summary.get('preset_label', '(unknown)')}, "
+            f"target {cfg_summary.get('num_shapes', '?')} shapes"
+        )
+
+    def _on_worker_progress(self, shape_count: int, total: int) -> None:
+        if total > 0:
+            pct = max(0, min(100, int(100 * shape_count / total)))
+            self.progress.setValue(pct)
+        self.status_label.setText(f"Shape {shape_count} of {total}")
+
+    def _on_worker_done(self, output_path: str, shape_count: int) -> None:
+        self.output_path = Path(output_path)
+        self.status_label.setText(
+            f"Done — {shape_count} shapes written to {Path(output_path).name}"
+        )
+        self.progress.setValue(100)
+        # Brief pause before auto-accept so the user sees the success
+        # state. Qt's accept() can fire immediately — but the dialog
+        # closing instantly looks like a crash; let the success render.
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(500, self.accept)
+
+    def _on_worker_error(self, stage: str, message: str) -> None:
+        # Re-enable form so the user can adjust + retry without re-opening
+        # the dialog from scratch. Cancelled stage doesn't pop a modal
+        # (user already knows what they did).
+        self._unlock_ui_for_run()
+        if stage != "cancelled":
+            QMessageBox.critical(
+                self, f"GPU generation failed — {stage}",
+                f"Stage: {stage}\n\n{message}",
+            )
+        self.status_label.setText(
+            f"Failed at {stage} — adjust settings and try again."
+            if stage != "cancelled"
+            else "Cancelled."
+        )
+
+    # ----- UI state helpers -----
+
+    def _resolve_output_path(self, preset: dict) -> Path:
+        """Honor the user's typed output path if set; else fall back to
+        the placeholder (source stem + _N.json next to source)."""
+        text = self.output_field.text().strip()
+        if text:
+            return Path(text)
+        stem = self.source_path.stem
+        return self.source_path.parent / f"{stem}_{preset['num_shapes']}.json"
+
+    def _lock_ui_for_run(self) -> None:
         self.source_browse_btn.setEnabled(False)
         self.preset_combo.setEnabled(False)
         self.output_field.setEnabled(False)
         self.generate_btn.setEnabled(False)
-        self.cancel_btn.setText("Abort")
+        self.cancel_btn.setText("Cancel run")
+        # Wire Cancel button to worker.cancel — only valid during a run.
+        # Disconnect on _unlock so the next Cancel reverts to reject().
+        try:
+            self.cancel_btn.clicked.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+        self.cancel_btn.clicked.connect(self._on_cancel_run)
         self.progress.setVisible(True)
+        self.progress.setValue(0)
         self.status_label.setVisible(True)
-        self.status_label.setText(
-            "(Phase 2 scaffolding — Phase 3 will plug in the embedded-Python "
-            "subprocess runner. Generation does not actually run yet.)"
-        )
-        # Don't auto-close — let the user dismiss after reading the stub note.
+        self.status_label.setText("Preparing GPU runtime…")
+
+    def _unlock_ui_for_run(self) -> None:
+        self.source_browse_btn.setEnabled(True)
+        self.preset_combo.setEnabled(True)
+        self.output_field.setEnabled(True)
+        self.generate_btn.setEnabled(self.source_path is not None)
+        self.cancel_btn.setText("Cancel")
+        try:
+            self.cancel_btn.clicked.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+        self.cancel_btn.clicked.connect(self.reject)
+
+    def _on_cancel_run(self) -> None:
+        """Cancel-during-run: ask the worker to terminate the subprocess.
+        The worker emits an error event with stage='cancelled' which
+        routes through _on_worker_error → _unlock_ui_for_run."""
+        if hasattr(self, "_worker") and self._worker is not None:
+            self._worker.cancel()
 
 
 def open_generate_dialog_if_runtime_ready(parent) -> Path | None:
