@@ -8,9 +8,13 @@ import torch
 
 from forza_abyss_painter.shapegen.gpu.device import DTYPE, get_device
 from forza_abyss_painter.shapegen.gpu.rasterize import rasterize_rotated_ellipses
-from forza_abyss_painter.shapegen.gpu.scoring import ALPHA_FIXED, score_batch
+from forza_abyss_painter.shapegen.gpu.scoring import (
+    ALPHA_FIXED, score_batch, score_batch_chunked,
+)
 from forza_abyss_painter.shapegen.gpu.shapes_gpu import KINDS, ShapeKind
-from forza_abyss_painter.shapegen.gpu.bbox_score import crop_score_ellipse_batch
+from forza_abyss_painter.shapegen.gpu.bbox_score import (
+    crop_score_ellipse_batch, crop_score_ellipse_batch_chunked,
+)
 from forza_abyss_painter.shapegen.gpu.joint_polish import joint_polish
 
 
@@ -143,6 +147,29 @@ class GPUConfig:
     grad_starts: int = 16
     grad_steps: int = 50
     grad_lr: float = 2.0
+    # VRAM budget in GiB. 0 = no budget = run the full K-batch in one
+    # pass (original behavior). >0 = enable chunked-K mode: split the
+    # K candidates into VRAM-safe sub-batches and score each
+    # independently, then merge. Wall time scales roughly linearly with
+    # the chunk count; peak VRAM is bounded by the budget. Lets users
+    # set "12 GiB budget, 3000 shapes, 1200px" and have it run in 4
+    # chunks instead of refusing to start. See _resolve_k_chunk_size
+    # for the derivation.
+    vram_budget_gib: float = 0.0
+    # Explicit chunk-size override (mostly for tests). 0 = auto-derive
+    # from vram_budget_gib. >0 = force this chunk size regardless of
+    # budget. Useful when the budget calculation under/over-estimates
+    # for an unusual canvas geometry.
+    k_chunk_size: int = 0
+
+
+# Re-export the pure-Python chunk size resolver from vram_planner so
+# engine callers can use either qualified name. The torch-free module
+# is the single source of truth for the formula; this alias keeps
+# existing engine-internal imports working.
+from forza_abyss_painter.shapegen.gpu.vram_planner import (
+    resolve_k_chunk_size as _resolve_k_chunk_size,
+)
 
 
 def _random_params(K: int, w: int, h: int, gen: torch.Generator) -> torch.Tensor:
@@ -458,6 +485,25 @@ def _run_gpu_inner(
     use_bbox = (cfg.bbox_local and cfg.refine_mode == "gradient"
                 and len(kinds) == 1 and kinds[0].name == "rotated_ellipse")
 
+    # Resolve the chunked-K mini-batch size ONCE up front. Used by every
+    # call to crop_score_ellipse_batch_chunked / score_batch_chunked
+    # below. 0 = no chunking (full K-batch in one pass, original
+    # behavior). >0 = split into chunks of this size. See
+    # _resolve_k_chunk_size docstring + GPUConfig.vram_budget_gib /
+    # k_chunk_size docs for the derivation.
+    _k_chunk = _resolve_k_chunk_size(
+        K=cfg.random_samples,
+        bbox_local=use_bbox,
+        max_resolution=max(int(h), int(w)),
+        vram_budget_gib=cfg.vram_budget_gib,
+        k_chunk_override=cfg.k_chunk_size,
+        bbox_crop_max=cfg.bbox_crop_max,
+    )
+    if _k_chunk > 0:
+        n_chunks = (cfg.random_samples + _k_chunk - 1) // _k_chunk
+        print(f"[chunked-K] K={cfg.random_samples}, chunk_size={_k_chunk}, "
+              f"n_chunks={n_chunks}, budget={cfg.vram_budget_gib:.1f} GiB")
+
     if alpha_mask is not None:
         # Fill out-of-silhouette target pixels with the canvas substrate color (grey 40).
         # Rationale: in-game and CPU renderers paint every shape's full ellipse unclipped —
@@ -519,9 +565,10 @@ def _run_gpu_inner(
             # by the gradient refiner below.
             ekind = kinds[0]
             params = ekind.init(cfg.random_samples, w, h, gen).to(device)
-            scores, colors, alphas = crop_score_ellipse_batch(
+            scores, colors, alphas = crop_score_ellipse_batch_chunked(
                 params, canvas, target, alpha_t=alpha_t, edge_weight=edge_weight,
-                alpha_levels=cfg.alpha_levels, max_crop_radius=cfg.bbox_crop_max)
+                alpha_levels=cfg.alpha_levels, max_crop_radius=cfg.bbox_crop_max,
+                chunk_size=_k_chunk)
             idx_t = scores.argmin()
             best_score = float(scores[idx_t].cpu().item())
             if best_score != float("inf"):
@@ -536,9 +583,11 @@ def _run_gpu_inner(
             for kind in kinds:
                 params = kind.init(per_kind, w, h, gen).to(device)
                 masks = kind.rasterize_hard(params, h, w)
-                scores, colors, alphas = score_batch(masks, canvas, target, alpha_mask=alpha_t,
-                                                     alpha_levels=cfg.alpha_levels,
-                                                     edge_weight=edge_weight)
+                scores, colors, alphas = score_batch_chunked(
+                    masks, canvas, target, alpha_mask=alpha_t,
+                    alpha_levels=cfg.alpha_levels,
+                    edge_weight=edge_weight,
+                    chunk_size=_k_chunk)
                 idx_t = scores.argmin()
                 val = float(scores[idx_t].cpu().item())
                 if val < best_score:
@@ -581,9 +630,11 @@ def _run_gpu_inner(
                 mut_cpu = _mutate(best_params.cpu(), cfg.mutations_per_round, w, h, gen)
                 mut = mut_cpu.to(device)
                 mut_masks = rasterize_rotated_ellipses(mut, h, w)
-                mut_scores, mut_colors, mut_alphas = score_batch(
-                    mut_masks, canvas, target, alpha_mask=alpha_t, alpha_levels=cfg.alpha_levels,
-                    edge_weight=edge_weight)
+                mut_scores, mut_colors, mut_alphas = score_batch_chunked(
+                    mut_masks, canvas, target, alpha_mask=alpha_t,
+                    alpha_levels=cfg.alpha_levels,
+                    edge_weight=edge_weight,
+                    chunk_size=_k_chunk)
                 local_best_t = mut_scores.argmin()
                 local_best_score = float(mut_scores[local_best_t].cpu().item())
                 if local_best_score < best_score:

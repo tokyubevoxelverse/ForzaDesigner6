@@ -173,3 +173,60 @@ def score_batch(
             best_col = torch.where(better.unsqueeze(-1), col, best_col)
             best_a = torch.where(better, torch.full_like(rms, float(a)), best_a)
     return best_rms, best_col, best_a.round().to(torch.uint8)
+
+
+def score_batch_chunked(
+    masks: "torch.Tensor",
+    current_u8: "torch.Tensor",
+    target_u8: "torch.Tensor",
+    alpha_mask: "torch.Tensor | None" = None,
+    alpha: int = ALPHA_FIXED,
+    alpha_levels: "list[int] | None" = None,
+    edge_weight: "torch.Tensor | None" = None,
+    *,
+    chunk_size: int = 0,
+) -> "tuple[torch.Tensor, torch.Tensor, torch.Tensor]":
+    """Chunked wrapper around `score_batch`.
+
+    Splits the K-sized mask batch into chunks of `chunk_size` candidates,
+    scores each chunk independently, concatenates the per-candidate
+    outputs. Mathematically equivalent to a single full-K call (same
+    candidates, same per-candidate (rms, color, alpha) tuples, same
+    argmin downstream) at a fraction of the peak VRAM.
+
+    Why this exists: the (K, H, W, 3) intermediate inside `score_batch`
+    is the dominant VRAM cost. K=16384 at 1200px = ~40 GiB. Chunking
+    K=16384 into 4 chunks of K=4096 caps the live intermediate at
+    ~10 GiB, fits an RTX 3060 / 4070, takes ~4x wall time. That's the
+    painter-fh6 architectural trade-off (sequential candidates = low
+    VRAM, slow) generalized: the user picks where on the
+    speed-vs-memory curve they sit by setting a VRAM budget.
+
+    `chunk_size <= 0` or `chunk_size >= K` runs as a single pass
+    (the original `score_batch` behavior) — no overhead when not
+    chunking.
+    """
+    import torch as _t
+    K = masks.shape[0]
+    if chunk_size <= 0 or chunk_size >= K:
+        return score_batch(masks, current_u8, target_u8,
+                           alpha_mask=alpha_mask, alpha=alpha,
+                           alpha_levels=alpha_levels, edge_weight=edge_weight)
+    # Per-chunk scoring + concat. The output tensors are small relative
+    # to the intermediates (just K-sized lists), so cat is cheap.
+    score_parts = []
+    color_parts = []
+    alpha_parts = []
+    for k_start in range(0, K, chunk_size):
+        k_end = min(k_start + chunk_size, K)
+        s, c, a = score_batch(
+            masks[k_start:k_end], current_u8, target_u8,
+            alpha_mask=alpha_mask, alpha=alpha,
+            alpha_levels=alpha_levels, edge_weight=edge_weight,
+        )
+        score_parts.append(s)
+        color_parts.append(c)
+        alpha_parts.append(a)
+    return (_t.cat(score_parts, dim=0),
+            _t.cat(color_parts, dim=0),
+            _t.cat(alpha_parts, dim=0))

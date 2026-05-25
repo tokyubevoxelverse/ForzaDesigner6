@@ -99,6 +99,9 @@ class RunConfig:
     progress_every: int = 0
     checkpoint_every: int = 0
     device: str = "cuda"
+    # VRAM budget for chunked-K mode (0 = no budget = full K in one
+    # pass; the engine uses this to derive chunk_size).
+    vram_budget_gib: float = 0.0
 
     # Optional human-readable label echoed back in the started event.
     # Used by the EXE's status bar / progress label.
@@ -151,6 +154,7 @@ class RunConfig:
             posterize_levels=int(d.get("posterize_levels", 0)),
             bbox_local=bool(d.get("bbox_local", False)),
             joint_polish_steps=int(d.get("joint_polish_steps", 0)),
+            vram_budget_gib=float(d.get("vram_budget_gib", 0.0)),
             lock_alpha=lock_alpha,
             progress_every=int(d.get("progress_every", 0)),
             checkpoint_every=int(d.get("checkpoint_every", 0)),
@@ -303,6 +307,7 @@ def run(cfg: RunConfig, stream=sys.stderr) -> int:
         posterize_levels=cfg.posterize_levels,
         bbox_local=cfg.bbox_local,
         joint_polish_steps=cfg.joint_polish_steps,
+        vram_budget_gib=cfg.vram_budget_gib,
         lock_alpha=cfg.lock_alpha,
     )
 

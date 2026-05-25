@@ -271,6 +271,7 @@ def build_run_config(
     output_json_path: Path,
     preset: dict,
     sticker_mode: bool = False,
+    vram_budget_gib: float = 0.0,
 ) -> dict:
     """Map a Generate dialog preset entry → torch_runner RunConfig dict.
 
@@ -295,4 +296,9 @@ def build_run_config(
         "checkpoint_every": max(1, int(preset["num_shapes"]) // 20),
         "lock_alpha": True,   # hard system constraint per CLAUDE.md §3
         "preset_label": str(preset.get("label", "")),
+        # Chunked-K mode: engine splits the K candidate batch into
+        # VRAM-safe sub-batches when budget > 0. 0 = no budget = run
+        # the full K in one pass (original behavior). Trade wall time
+        # linearly for peak VRAM.
+        "vram_budget_gib": float(vram_budget_gib),
     }

@@ -903,38 +903,52 @@ class MainWindow(QMainWindow):
             self.queue.set_status(image_path, "queued")
             return
 
-        # VRAM budget pre-flight. Compute the predicted peak from the
-        # user's current settings (port of the colab planner formula)
-        # and compare against their chosen budget. If peak > budget *
-        # 0.85 (15% headroom for driver + OS overhead), warn the user
-        # and let them decide whether to proceed. This is the
-        # difference between "GPU starved FH6 mid-game" (current pain
-        # point) and "the app told me before I started".
+        # VRAM budget + chunked-K pre-flight. Compute the predicted
+        # peak from the user's current settings and the budget they
+        # picked. Instead of REFUSING runs that exceed budget (the
+        # old UX), we now PASS THE BUDGET to the engine which
+        # auto-splits the K-batch into chunks that fit. Wall time
+        # scales linearly with chunk count, but the run completes
+        # at the same quality.
+        #
+        # This is the painter-fh6 architectural trade-off
+        # generalized: "set budget, let it cook" — exactly what
+        # casual users wanted but couldn't get without manually
+        # tuning random_samples / max_resolution.
         peak_gib = self.settings_panel.estimate_peak_vram_gib(profile)
         budget_gib = self.settings_panel.selected_vram_budget_gib()
+        chunk_warning = ""
         if budget_gib > 0 and peak_gib > budget_gib * 0.85:
+            n_chunks = max(2, int(peak_gib / (budget_gib * 0.85)) + 1)
             answer = QMessageBox.question(
-                self, "GPU run may exceed VRAM budget",
-                f"This run is estimated to need <b>{peak_gib:.1f} GiB</b> "
-                f"of VRAM, but your budget is <b>{budget_gib} GiB</b> "
-                f"(85% safe threshold: {budget_gib * 0.85:.1f} GiB).\n\n"
-                f"Likely outcomes if you proceed:\n"
-                f"  • Other GPU apps (FH6, Discord, browser) slow down "
-                f"or stutter\n"
-                f"  • CUDA OOM mid-run with a generic 'out of memory' "
-                f"error\n"
-                f"  • Driver crash on extreme over-budget runs\n\n"
-                f"Fixes (settings panel):\n"
-                f"  • Lower <b>Random samples</b> (~half = ~half VRAM)\n"
-                f"  • Lower <b>Max resolution</b> (drop to 800 or 600 px)\n"
-                f"  • Raise <b>GPU VRAM budget</b> to a higher tier\n\n"
-                f"Proceed anyway?",
+                self, "Chunked GPU run — longer wall-time",
+                f"<b>Your settings would need ~{peak_gib:.1f} GiB</b> at "
+                f"full-K, but your budget is <b>{budget_gib} GiB</b>.<br><br>"
+                f"To stay under budget, the engine will auto-chunk the "
+                f"candidate batch into <b>~{n_chunks} smaller chunks</b>.<br><br>"
+                f"<b>Expected:</b><br>"
+                f"  • Wall time roughly <b>{n_chunks}× longer</b> than a "
+                f"single-chunk run<br>"
+                f"  • Peak VRAM stays under {budget_gib} GiB — other apps "
+                f"(FH6, Discord) keep their GPU memory<br>"
+                f"  • Same quality output — chunking only changes "
+                f"<i>when</i> candidates are scored, not <i>what</i> "
+                f"candidates are tried<br><br>"
+                f"<b>If you want it faster instead:</b><br>"
+                f"  • Raise <b>GPU VRAM budget</b> in settings to a "
+                f"higher tier<br>"
+                f"  • Or lower <b>Random samples</b> / "
+                f"<b>Max resolution</b> for a single-chunk run<br><br>"
+                f"Proceed with chunked run?",
                 QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
+                QMessageBox.Yes,   # default Yes — chunking just works
             )
             if answer != QMessageBox.Yes:
                 self.queue.set_status(image_path, "queued")
                 return
+            chunk_warning = (
+                f" (auto-chunked into ~{n_chunks}, wall time ~{n_chunks}×)"
+            )
         # Build a preset dict matching gpu_gen_worker.build_run_config()'s
         # expected fields. Source values from the SettingsPanel so what
         # the user picked in CPU mode carries over to GPU.
@@ -948,7 +962,8 @@ class MainWindow(QMainWindow):
         output_path = image_path.parent / image_path.stem / f"{image_path.stem}.json"
         output_path.parent.mkdir(parents=True, exist_ok=True)
         config = build_run_config(image_path, output_path, preset,
-                                    sticker_mode=sticker_mode)
+                                    sticker_mode=sticker_mode,
+                                    vram_budget_gib=float(budget_gib))
         config_path = image_path.parent / f".{image_path.stem}_gpu_config.json"
         try:
             config_path.write_text(_json.dumps(config, indent=2),

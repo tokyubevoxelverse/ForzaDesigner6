@@ -192,6 +192,7 @@ def _fake_engine(monkeypatch, tmp_path):
         posterize_levels: int = 0
         bbox_local: bool = False
         joint_polish_steps: int = 0
+        vram_budget_gib: float = 0.0
         lock_alpha: bool = True
     fake_mod.GPUConfig = _FakeGPUConfig
 
@@ -324,6 +325,7 @@ def test_run_engine_runtime_error_propagates_actionable_message(
         posterize_levels: int = 0
         bbox_local: bool = False
         joint_polish_steps: int = 0
+        vram_budget_gib: float = 0.0
         lock_alpha: bool = True
     fake_mod.GPUConfig = _Cfg
     def _oom_run_gpu(*a, **kw):
@@ -454,6 +456,7 @@ def test_real_subprocess_run_emits_started_then_done(tmp_path):
             posterize_levels: int = 0
             bbox_local: bool = False
             joint_polish_steps: int = 0
+            vram_budget_gib: float = 0.0
             lock_alpha: bool = True
         fake_eng.GPUConfig = _Cfg
         def _fake_run_gpu(target_rgb, cfg, alpha_mask=None,

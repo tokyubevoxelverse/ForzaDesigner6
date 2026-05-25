@@ -148,3 +148,50 @@ def crop_score_ellipse_batch(
 
     best_delta = torch.where(rejected, torch.full_like(best_delta, float("inf")), best_delta)
     return best_delta, best_col.round().to(torch.uint8), best_a.round().to(torch.uint8)
+
+
+def crop_score_ellipse_batch_chunked(
+    params: torch.Tensor,
+    canvas_u8: torch.Tensor,
+    target_u8: torch.Tensor,
+    alpha_t: torch.Tensor | None = None,
+    edge_weight: torch.Tensor | None = None,
+    alpha_levels: list[int] | None = None,
+    max_crop_radius: int = 256,
+    *,
+    chunk_size: int = 0,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Chunked wrapper around `crop_score_ellipse_batch`.
+
+    Same math, same per-candidate outputs, just splits the K-dim into
+    chunks of `chunk_size` for VRAM safety. The (K, B, B, 3) crop
+    intermediate (lines 71-72) is the dominant cost; chunking caps the
+    live tensor at `chunk_size × B² × 12 bytes`.
+
+    Per-chunk argmax happens internally; the caller still argmin's over
+    the concatenated (K,) scores. `chunk_size <= 0` or `>= K` runs as a
+    single pass with no overhead.
+    """
+    K = params.shape[0]
+    if chunk_size <= 0 or chunk_size >= K:
+        return crop_score_ellipse_batch(
+            params, canvas_u8, target_u8,
+            alpha_t=alpha_t, edge_weight=edge_weight,
+            alpha_levels=alpha_levels, max_crop_radius=max_crop_radius,
+        )
+    score_parts = []
+    color_parts = []
+    alpha_parts = []
+    for k_start in range(0, K, chunk_size):
+        k_end = min(k_start + chunk_size, K)
+        s, c, a = crop_score_ellipse_batch(
+            params[k_start:k_end], canvas_u8, target_u8,
+            alpha_t=alpha_t, edge_weight=edge_weight,
+            alpha_levels=alpha_levels, max_crop_radius=max_crop_radius,
+        )
+        score_parts.append(s)
+        color_parts.append(c)
+        alpha_parts.append(a)
+    return (torch.cat(score_parts, dim=0),
+            torch.cat(color_parts, dim=0),
+            torch.cat(alpha_parts, dim=0))

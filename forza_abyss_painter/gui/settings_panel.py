@@ -318,33 +318,25 @@ class SettingsPanel(QWidget):
         return int(data) if data is not None else 0
 
     def estimate_peak_vram_gib(self, profile) -> float:
-        """Port of the colab CELL_RESOLUTION_PLANNER peak-VRAM formula
-        (build_colab_notebook.py:287-372). Predicts peak VRAM from
-        the user's current shape-gen settings BEFORE the run starts
-        so we can warn them in time.
+        """Predicted peak VRAM in GiB for the user's current settings.
+        Single source of truth in `vram_planner.estimate_peak_vram_gib`
+        (no torch dependency) — same math the engine uses to decide
+        chunk-size on the subprocess side, so the UX preview matches
+        what actually happens at run time.
 
-        Formula: peak ≈ K × footprint × 3 channels × 4 bytes/float32
-                       × safety_multiplier / 1e9 (→ GiB).
-        Where:
-          K          = random_samples (single-shape ellipse-only)
-          footprint  = bbox crop² (single ellipse) or full canvas
-          safety_mul = 5.5 (bbox-local) or 3.5 (full canvas)
-
-        EXE shape-gen always runs ellipse-only single-type so we use
-        the bbox-local branch — same as colab's
-        bbox_local + rotated_ellipse path.
+        Always passes bbox_local=True because the EXE shape-gen runs
+        ellipse-only + gradient mode (the production preset). If we
+        ever ship presets with bbox_local=False, this needs to thread
+        the flag through.
         """
-        max_res = max(64, int(profile.max_resolution))
-        samples = max(1, int(profile.random_samples))
-        # bbox crop: min(256, max_dim/8) — mirrors engine.py:160 crop
-        crop_e = min(256, max_res // 8)
-        footprint = min((2 * crop_e + 1) ** 2, max_res * max_res)
-        bytes_per_pixel_3ch_f32 = 3 * 4   # 12 bytes
-        safety_multiplier = 5.5            # bbox-local calibrated value
-        peak_gib = (
-            samples * footprint * bytes_per_pixel_3ch_f32 * safety_multiplier
-        ) / 1e9
-        return peak_gib
+        from forza_abyss_painter.shapegen.gpu.vram_planner import (
+            estimate_peak_vram_gib,
+        )
+        return estimate_peak_vram_gib(
+            K=max(1, int(profile.random_samples)),
+            bbox_local=True,
+            max_resolution=max(64, int(profile.max_resolution)),
+        )
 
     def selected_backend(self) -> str:
         """Return 'cpu' or 'gpu' — which shape-gen backend the user

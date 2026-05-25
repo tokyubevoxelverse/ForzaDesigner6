@@ -35,7 +35,10 @@ import torch
 
 from forza_abyss_painter.shapegen.gpu.device import DTYPE
 from forza_abyss_painter.shapegen.gpu.rasterize import rasterize_rotated_ellipses
-from forza_abyss_painter.shapegen.gpu.bbox_score import crop_score_ellipse_batch
+from forza_abyss_painter.shapegen.gpu.bbox_score import (
+    crop_score_ellipse_batch, crop_score_ellipse_batch_chunked,
+)
+from forza_abyss_painter.shapegen.gpu.engine import _resolve_k_chunk_size
 from forza_abyss_painter.shapegen.gpu.shapes_gpu import KINDS
 from forza_abyss_painter.shapegen.gpu.scoring import ALPHA_FIXED
 from forza_abyss_painter.shapegen.gpu.joint_polish import _hard_render, _resolve_rgb_closed_form
@@ -104,13 +107,22 @@ def _mini_greedy_refill(canvas: torch.Tensor, target: torch.Tensor,
     target_u8 = target.to(torch.uint8) if target.dtype != torch.uint8 else target
     device = canvas.device
 
+    # Resolve chunk size once per refill pass (config doesn't change).
+    _k_chunk = _resolve_k_chunk_size(
+        K=cfg.random_samples, bbox_local=True,
+        max_resolution=max(int(h), int(w)),
+        vram_budget_gib=cfg.vram_budget_gib,
+        k_chunk_override=cfg.k_chunk_size,
+        bbox_crop_max=cfg.bbox_crop_max,
+    )
     for _ in range(n_to_commit):
         # 1. Random search over K candidates targeting the residual canvas.
         params = ekind.init(cfg.random_samples, w, h, generator).to(device)
-        scores, colors, alphas = crop_score_ellipse_batch(
+        scores, colors, alphas = crop_score_ellipse_batch_chunked(
             params, canvas_u8, target_u8,
             alpha_t=alpha_t, edge_weight=edge_weight,
             alpha_levels=cfg.alpha_levels, max_crop_radius=cfg.bbox_crop_max,
+            chunk_size=_k_chunk,
         )
         if not torch.isfinite(scores).any():
             break   # all candidates rejected (eg sticker overlap too low); nothing useful to add
