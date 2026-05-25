@@ -80,8 +80,26 @@ Each notebook installs from this repo (`pip install git+https://github.com/whyku
 
 ## Credits
 
-- **[tokyubevoxelverse/ForzaDesigner6](https://github.com/tokyubevoxelverse/ForzaDesigner6)** — upstream project. All multi-game suite scaffolding (FH3-6 + ACC), the original injector, the CPU shape generator, theme system, GUI, and most of what makes this work.
-- **[bvzrays/forza-painter-fh6](https://github.com/bvzrays/forza-painter-fh6)** — injector performance research; the sampled-revalidation approach is adapted from their `forza-painter` per-shape loop.
+GitHub only lets a repo declare one fork parent. We're nominally forked from `tokyubevoxelverse/ForzaDesigner6`, but the FH6 injection layer here is the result of cross-pollination with [`bvzrays/forza-painter-fh6`](https://github.com/bvzrays/forza-painter-fh6) — when our injector is fast and reliable on a current FH6 build, that's their research. Specific things we adopted (with locations in their source):
+
+- **8-byte sentinel + scan-window strategy** — `src/game_profiles.py` (`KNOWN_LIVERY_SIGNATURE`, `COMMON_SCAN_REGIONS`). We use the same sentinel and the same three windows.
+- **4-step pointer chain + mirror gate** — `src/main.py:calculate_CLivery`. Same offsets (sig+0xB8 → +0xA58 → +0x8 → +0x20), same `+0x70` mirror check.
+- **Two-strategy heap region order** — `src/fh6_probe.py:locate_clivery_groups_by_layout_count`. We adopted both `v1.3` small-address-asc and `v1.4` large-size-desc strategies; without this our scan was 6.6× slower than painter's.
+- **Painter-matched validation thresholds** — `src/fh6_probe.py:validate_table_layer_coverage`. The 25%-or-32-min strict-valid threshold and duplicate-pointer skip; before adopting this, our injector rejected templates that painter accepted.
+- **Partial-read tolerance** — `src/native.py:read_process_memory`. Accepting `ERROR_PARTIAL_COPY` reads (rather than discarding them) — required for scan windows that extend past the module end.
+- **Per-layer write loop + write convention** — position `(X, -Y)`, scale divisors (ellipse `/63`, other `/127`), rotation `360-deg`, color `RGBA` alpha forced to 255, shape-id bytes 101/102.
+
+What's original here on top of painter's foundation:
+
+- **GUI** — Qt-based dark-themed app with image upload, live preview, progress dialog, persistent inject log, dialog footer with log path.
+- **Post-locate table validation as a hard gate** — sampled scoring + grouped-template detection via duplicate-pointer count, surfaced with actionable diagnostics in the inject dialog ("template is grouped — Select All → Ungroup").
+- **Per-gate `[fast-locate]` / `[readiness]` trace logging** — every chain hop's read address + resolved value persisted to `%LOCALAPPDATA%\ForzaAbyssPainter\logs\inject-*.log` for post-mortem debugging.
+- **Pre-inject template-size picker** — constrain heap scan to a user-specified size (skip the common-sizes walk).
+- **GPU shape-gen pipeline** — Colab notebooks for 400 / 700 / 1000 / 3000-shape JSONs.
+
+Other credits:
+
+- **[tokyubevoxelverse/ForzaDesigner6](https://github.com/tokyubevoxelverse/ForzaDesigner6)** — upstream fork parent. Multi-game suite scaffolding (FH3-6 + ACC), the original FD6 GUI, the CPU shape generator, theme system, and JSON format.
 - **forza-painter (the_adawg)** — original `forza-painter` tooling that inspired upstream FD6.
 - **geometrize-lib (Sam Twidale)** + **Primitive (Michael Fogleman)** — the underlying greedy shape-fitting algorithm.
 
