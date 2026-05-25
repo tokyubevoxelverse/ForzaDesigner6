@@ -333,6 +333,62 @@ def run_gpu(
     checkpoint_cb=None,
     checkpoint_every: int = 0,
 ) -> tuple[list[dict], np.ndarray]:
+    """Public entry point — wraps `_run_gpu_inner` with CUDA OOM recovery.
+
+    On `torch.cuda.OutOfMemoryError`: drops CUDA cache so the runtime sees
+    free memory on the next attempt, then raises `RuntimeError` with an
+    actionable recipe naming the specific knobs to lower (MAX_RESOLUTION,
+    RANDOM_SAMPLES). Without this wrapper users get a raw torch traceback
+    that doesn't tell them what to change — and the cache holds the OOM
+    state so the next attempt without restart STILL OOMs even on identical
+    parameters that would have fit cold.
+
+    Critical for the consumer-GPU notebook variants where the VRAM probe
+    can underestimate peak usage when FH6 is running concurrently and its
+    VRAM consumption fluctuates mid-shape-gen.
+    """
+    try:
+        return _run_gpu_inner(target_rgb, cfg, alpha_mask=alpha_mask,
+                              progress_every=progress_every,
+                              checkpoint_cb=checkpoint_cb,
+                              checkpoint_every=checkpoint_every)
+    except torch.cuda.OutOfMemoryError as e:
+        # Drop the cached allocator state so a follow-up attempt with
+        # lower settings doesn't inherit this run's high-water mark.
+        peak_mib = 0.0
+        try:
+            if torch.cuda.is_available():
+                peak_mib = torch.cuda.max_memory_allocated() / (1 << 20)
+                torch.cuda.empty_cache()
+                torch.cuda.reset_peak_memory_stats()
+        except Exception:
+            pass
+        h, w = target_rgb.shape[:2]
+        # Concrete halving recommendations based on what the user set.
+        rec_max = max(240, int(max(h, w) // 2))
+        rec_samples = max(1024, cfg.random_samples // 2)
+        raise RuntimeError(
+            f"CUDA out of memory during shape-gen at {w}x{h} canvas. "
+            f"Peak VRAM observed: ~{peak_mib / 1024:.1f} GiB.\n\n"
+            f"Recovery — re-run the Configure cell with EITHER:\n"
+            f"  • MAX_RESOLUTION ≤ {rec_max} (halve the canvas long side), OR\n"
+            f"  • RANDOM_SAMPLES ≤ {rec_samples} (halve the candidate batch)\n"
+            f"  • Both for max safety\n\n"
+            f"Then re-run from the Resolution Planner cell (it'll re-verify "
+            f"the new settings fit). If you have FH6 open and it's using a "
+            f"lot of VRAM, closing it briefly frees ~4–6 GiB for the run.\n\n"
+            f"Original error: {e}"
+        ) from e
+
+
+def _run_gpu_inner(
+    target_rgb: np.ndarray,
+    cfg: GPUConfig,
+    alpha_mask: np.ndarray | None = None,
+    progress_every: int = 0,
+    checkpoint_cb=None,
+    checkpoint_every: int = 0,
+) -> tuple[list[dict], np.ndarray]:
     """Run the GPU shape-gen loop. Returns (shapes_as_json_dicts, final_canvas_u8_numpy).
 
     If `checkpoint_cb` and `checkpoint_every > 0`, the greedy phase calls
