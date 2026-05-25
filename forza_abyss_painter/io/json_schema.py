@@ -99,10 +99,19 @@ class FD6Document:
           - shapes[0] is the background rectangle. data = [bg_x, bg_y, image_w, image_h];
             data[2:4] carries the canvas size. If color alpha > 0, the BG renders;
             we emit it as a centered rectangle covering the full canvas.
-          - shapes[1:] are drawables. For type=1 (RECTANGLE) data=[x,y,w,h], x/y
-            are CENTER and w/h are FULL extents — we halve to hw/hh. For
-            type=16 (ROTATED_ELLIPSE) data=[x,y,w,h,rot] same convention plus
-            rotation in degrees — we halve to rx/ry, pass angle through.
+          - shapes[1:] are drawables. The geometrize conventions differ per shape:
+              * type=1 (RECTANGLE): data=[x,y,w,h] where x/y are CENTER and
+                w/h are FULL extents (painter renders as `x±w/2`, writes
+                `w/127` to the game expecting full-width/127). We halve to
+                our hw/hh.
+              * type=16 (ROTATED_ELLIPSE): data=[x,y,w,h,rot] where x/y are
+                CENTER, but w/h are RADII / half-extents (painter passes
+                them directly to cv2.ellipse's `axes` parameter — which
+                takes radii — and writes `w/63` to the game expecting
+                radius/63). We pass w/h THROUGH to our rx/ry without
+                halving. Rotation is in degrees.
+            (Yes, geometrize is internally inconsistent — rectangle data is
+            full extents, ellipse data is radii. Painter inherits this.)
           - Color is uint8 [r,g,b,a]; transparent (a==0) shapes are skipped
             (matches painter's load behavior).
         """
@@ -186,7 +195,10 @@ class FD6Document:
                 "color": rgba,
             }
         if t == cls._LEGACY_ROTATED_ELLIPSE:
-            # data=[x,y,w,h,rot], x/y CENTER, w/h FULL extents, rot degrees.
+            # data=[x,y,w,h,rot] — x/y CENTER, w/h are ALREADY RADII (not
+            # full extents — geometrize/painter pass them directly to
+            # cv2.ellipse's `axes` parameter which takes half-extents).
+            # Pass through to our rx/ry without halving; rot is degrees.
             if len(d) < 5:
                 return None
             x, y, w, h, rot = (float(d[0]), float(d[1]), float(d[2]),
@@ -194,7 +206,7 @@ class FD6Document:
             return {
                 "type": "rotated_ellipse",
                 "x": x, "y": y,
-                "rx": w / 2.0, "ry": h / 2.0,
+                "rx": w, "ry": h,
                 "angle": rot,
                 "color": rgba,
             }

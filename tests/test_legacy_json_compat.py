@@ -121,10 +121,17 @@ def test_legacy_visible_bg_emitted_as_centered_rectangle():
     assert bg["color"][3] == 200
 
 
-def test_legacy_rotated_ellipse_data_is_center_with_full_extents():
-    """Painter's convention: data=[x,y,w,h,rot] where x,y are CENTER and
-    w,h are FULL width/height (not half). Our native format wants rx,ry
-    as RADII (= half-extents). The conversion must halve."""
+def test_legacy_rotated_ellipse_data_w_h_are_already_radii():
+    """Geometrize's quirk: for ROTATED_ELLIPSE, data[2] and data[3] are
+    ALREADY radii (half-extents), NOT full extents. Painter passes them
+    directly to cv2.ellipse's `axes` parameter (which takes radii) and
+    writes `w / 63` to the game expecting a radius value. So our rx/ry
+    must come THROUGH unhalved.
+
+    This was a wrong-by-2x bug that rendered every ellipse at quarter-
+    area: erebus's chibi nihilister.1000.json loaded but the preview
+    canvas was dominated by tiny dots because every ellipse was at 1/4
+    its intended radius."""
     legacy = _painter_json(drawables=[
         {"type": 16, "data": [128, 128, 100, 60, 90],
          "color": [255, 128, 64, 255], "score": 0.3},
@@ -133,7 +140,7 @@ def test_legacy_rotated_ellipse_data_is_center_with_full_extents():
     s = doc.shapes[0]
     assert s["type"] == "rotated_ellipse"
     assert s["x"] == 128.0 and s["y"] == 128.0   # CENTER preserved
-    assert s["rx"] == 50.0 and s["ry"] == 30.0   # FULL extents halved
+    assert s["rx"] == 100.0 and s["ry"] == 60.0  # w/h passed through as radii
     assert s["angle"] == 90.0
 
 
@@ -198,7 +205,7 @@ def test_legacy_drawables_materialize_to_rotated_ellipse_instances():
     s = shapes[0]
     assert isinstance(s, RotatedEllipse)
     assert s.x == 100.0 and s.y == 100.0
-    assert s.rx == 25.0 and s.ry == 15.0   # halved from 50, 30
+    assert s.rx == 50.0 and s.ry == 30.0   # w/h passed through as radii (not halved)
     assert s.angle == 45.0
     assert s.color == (255, 128, 64, 255)
 
