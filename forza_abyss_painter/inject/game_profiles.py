@@ -27,6 +27,37 @@ from dataclasses import dataclass, field
 # This name has been stable across FH4/FH5/FH6 builds to date.
 RTTI_CLIVERY_GROUP = b".?AVCLiveryGroup@@"
 
+# ---- Painter-style signature-chain locator constants ----
+# Adopted from /tmp/forza-painter-fh6/src/game_profiles.py. The signature is an
+# 8-byte sentinel that bvzrays identified as living in a small fixed window of the
+# game's .exe image (NOT in the heap). Finding the signature lets us walk a short
+# pointer chain to the CLivery object directly, skipping the multi-minute heap
+# enumeration. The signature was originally derived for FH5-era builds but the
+# chain offsets work for FH6 too.
+KNOWN_LIVERY_SIGNATURE = b'\x12\x47\x9B\x13\x29\xD9\xA2\xB1'
+
+# Scan windows for the signature. Painter's original 3 windows at +0x06/+0x08/
+# +0x0A cover offsets 96-201 MiB into the FH6 module. On FH6 UWP build
+# 3.360.259.0 (verified via live capture) the sentinel is at offset
+# Base+0xa7f1048 = 167.94 MiB, which falls inside window 3 (0x0a000000 to
+# 0x0c000000 = 167.77-201.32 MiB). The 32 MiB read extends past the 178.93 MiB
+# module end — Windows returns ERROR_PARTIAL_COPY with ~11 MiB of valid
+# bytes. Our _try_read_chunk now accepts those partial reads (matches
+# painter's read_process_memory), so window 3 finds the sig cleanly.
+#
+# 2026-05-25 NOTE: an earlier fix added a 4th window (0xA7000000, 0x02000000).
+# That was a digit typo — 0xA7000000 in absolute offset = 2.67 GiB, way past
+# the ~180 MiB module. The intended value would have been 0x0A700000 (167 MiB),
+# which is already inside window 3's range. Removed; window 3 + partial reads
+# is the correct path.
+#
+# Total scan budget: 96 MiB across 3 windows — painter parity.
+COMMON_SCAN_REGIONS: tuple[tuple[int, int], ...] = (
+    (0x06000000, 0x02000000),
+    (0x08000000, 0x02000000),
+    (0x0A000000, 0x02000000),   # FH6 3.360.x sig at Base+0xa7f1048 lands here (needs partial-read support)
+)
+
 
 @dataclass(frozen=True)
 class GameProfile:
@@ -56,6 +87,17 @@ class GameProfile:
     # Game's shape-id byte values
     shape_id_ellipse: int = 102
     shape_id_other: int = 101
+
+    # ---- Signature-chain locator (painter parity, fast path) ----
+    # Set signature_patterns=() to disable the fast path for this profile and force the
+    # heap-scan fallback only.
+    signature_patterns: tuple[bytes, ...] = (KNOWN_LIVERY_SIGNATURE,)
+    scan_regions: tuple[tuple[int, int], ...] = COMMON_SCAN_REGIONS
+    validation_mirror_offset: int = 0x70    # u32 at sig+0x70 must mirror u32 at sig
+    livery_root_pointer_offset: int = 0xB8  # sig + 0xB8 → addrA
+    editor_pointer_offset: int = 0xA58      # addrA + 0xA58 → addrB
+    livery_pointer_offset: int = 0x8        # addrB + 0x8 → cLivery
+    livery_group_offset: int = 0x20         # cLivery + 0x20 → vinyl group base
 
     # Heuristic hint: is this profile validated against a known build?
     # Untrusted (beta) profiles should surface a warning in the GUI.

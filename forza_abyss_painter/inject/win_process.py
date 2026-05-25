@@ -234,9 +234,35 @@ class ProcessHandle:
         return bytes(out)
 
     def _try_read_chunk(self, addr: int, size: int) -> bytes | None:
+        """Read up to `size` bytes from `addr`. Returns whatever was actually
+        readable, even when ReadProcessMemory returns False with a non-zero
+        partial nread count (ERROR_PARTIAL_COPY = 0x12B).
+
+        PAINTER PARITY (2026-05-25): the previous version rejected partial
+        reads (`if not ok or nread.value == 0: return None`). When a scan
+        window extended past the end of the committed module image — eg
+        our 0x06..0x0C signature scan windows on a 178 MiB FH6 module —
+        Windows correctly returned ~11 MiB of valid bytes WITH RPM=False,
+        and we threw the readable bytes away. Painter's read_process_memory
+        (forza-painter-fh6/src/native.py:62-75) wraps RPM in try/except
+        and uses `nread.value` regardless. This is what lets painter's
+        fast-mode find the signature on the same build where ours can't:
+        the sig at Base+0xa7f1048 falls inside window 3 (0x0a000000-
+        0x0c000000) but window 3 extends past the module → our rejected
+        partial → no match → fall through to slow mode.
+
+        Returns None ONLY if zero bytes were readable (uncommitted region,
+        cross-process protected page, etc). Otherwise returns the partial
+        read — the caller's pattern-scan handles short buffers correctly
+        (bytes.find returns -1 on no-match, so a partial that doesn't
+        contain the needle just behaves the same as a full no-match).
+        """
         buf = (ctypes.c_ubyte * size)()
         ok = self._rpm(self.handle, addr, buf, size, ctypes.byref(self._nread))
-        if not ok or self._nread.value == 0:
+        # Accept partial reads. The kernel reports nread.value = bytes that
+        # WERE valid even when the call returns False, which happens when
+        # the requested range crosses an unreadable / uncommitted page.
+        if self._nread.value == 0:
             return None
         return bytes(buf[:self._nread.value])
 
