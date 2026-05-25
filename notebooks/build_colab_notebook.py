@@ -80,42 +80,17 @@ CELL_FOOTER = f"""<div align="center" style="margin-top: 32px; padding: 16px; bo
 </div>
 """
 
-CELL_VRAM_AUTOPICKER = '''# --- VRAM autopicker — what preset should you use? ---
-# Probes:
-#   (a) Free VRAM via torch.cuda.mem_get_info() — what's actually available
-#       right now, not just total card capacity.
-#   (b) Whether forzahorizon6.exe is running (local-Windows only — Colab
-#       always reports False since the game can't run there). On Windows
-#       with FH6 open, the game holds 4-6 GiB of VRAM, so shape-gen has to
-#       share. On Colab the GPU is dedicated.
-# Then prints a recommendation table mapping (free_vram, fh6_running) →
-# notebook preset. You manually open the recommended notebook if it differs
-# from the one you're in. Future work: auto-adjust this notebook's Configure
-# defaults to match the recommendation.
+CELL_VRAM_AUTOPICKER = '''# --- VRAM check — am I in the right notebook for this GPU? ---
+# These notebooks target SERVER / ENTERPRISE GPUs (Colab T4 / V100 / L4 / A100,
+# datacenter H100, etc.). Consumer gaming-GPU users should use the EXE's
+# in-app shape-gen instead — the EXE handles VRAM-coresident-with-FH6
+# scenarios with conservative defaults. Notebooks expect dedicated GPU
+# memory and don't bother managing co-resident game VRAM.
+#
+# This cell probes free VRAM via torch.cuda.mem_get_info() (what's
+# actually available right now, not just total card capacity), then
+# recommends the right Colab notebook variant for your card.
 import torch
-
-try:
-    import psutil
-    _PSUTIL_OK = True
-except ImportError:
-    _PSUTIL_OK = False
-    print("(psutil not installed — skipping FH6 process detect. pip install psutil to enable.)")
-
-def _fh6_running() -> bool:
-    """Return True iff forzahorizon6.exe is in the current process list. False
-    on non-Windows systems or when psutil is missing — Colab always returns
-    False since the game can't run in the Colab runtime."""
-    if not _PSUTIL_OK:
-        return False
-    targets = {"forzahorizon6.exe", "forzahorizon6-win64-shipping.exe"}
-    for p in psutil.process_iter(["name"]):
-        try:
-            n = (p.info["name"] or "").lower()
-            if n in targets:
-                return True
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
-    return False
 
 def _gpu_state():
     """Returns (gpu_name, free_gib, total_gib) or (None, 0, 0) if no CUDA."""
@@ -126,50 +101,38 @@ def _gpu_state():
     return (name, free_b / (1 << 30), total_b / (1 << 30))
 
 _gpu_name, _free_gib, _total_gib = _gpu_state()
-_fh6 = _fh6_running()
 
-print(f"GPU:        {_gpu_name or '(no CUDA)'}")
+print(f"GPU:   {_gpu_name or '(no CUDA)'}")
 if _gpu_name:
-    print(f"VRAM:       {_free_gib:.1f} GiB free / {_total_gib:.1f} GiB total")
-print(f"FH6 running: {'YES — sharing the GPU' if _fh6 else 'no (or undetectable)'}")
+    print(f"VRAM:  {_free_gib:.1f} GiB free / {_total_gib:.1f} GiB total")
 print()
 
-# Decision matrix: (free_gib_floor, fh6_running) → recommended notebook name.
-# Floors are lower bounds — if you have >= floor GiB free, you can use this preset.
-# Tuned conservatively: ~30% headroom buffer to absorb peak overshoot beyond the
-# resolution planner's estimate.
-_recs = []
-if _fh6:
-    if _free_gib >= 12:
-        _recs.append(("fap_gpu_local_consumer_1000", "1000 shapes, MAX_RES=720, FH6-coresident OK"))
-    elif _free_gib >= 6:
-        _recs.append(("fap_gpu_local_consumer_700", "700 shapes, MAX_RES=600"))
-    elif _free_gib >= 3:
-        _recs.append(("fap_gpu_local_consumer_400", "400 shapes, MAX_RES=480"))
-    else:
-        _recs.append((None, f"<3 GiB free with FH6 running — close the game first OR open a fap_gpu_colab_*.ipynb on Colab"))
+# Decision matrix: free GiB → recommended Colab notebook from the lineup
+# we actually ship. Floors are lower bounds — if you have ≥ floor GiB free,
+# you can use this preset. Tuned conservatively: ~30% headroom buffer to
+# absorb peak overshoot beyond the resolution planner's estimate.
+if _free_gib >= 24:
+    _rec = ("fap_gpu_colab_highres_3000", "3000 shapes, MAX_RES=1600, full quality. Needs L4 / A100 / equivalent.")
+elif _free_gib >= 12:
+    _rec = ("fap_gpu_colab_medium_1000", "1000 shapes, MAX_RES=1000. Comfortable on Colab T4 / V100.")
+elif _free_gib >= 6:
+    _rec = ("fap_gpu_colab_headshots_700", "700 shapes, MAX_RES=900. Tight but workable on Colab Free T4.")
+elif _free_gib > 0:
+    _rec = ("fap_gpu_colab_lineart_400", "400 shapes, MAX_RES=720. Minimum-viable preset for small VRAM.")
 else:
-    if _free_gib >= 24:
-        _recs.append(("fap_gpu_colab_highres_3000 / fap_gpu_local_overnight_3000", "3000 shapes, MAX_RES=1600, full quality"))
-    elif _free_gib >= 12:
-        _recs.append(("fap_gpu_colab_medium_1000 / fap_gpu_local_overnight_1000", "1000 shapes, MAX_RES=1000"))
-    elif _free_gib >= 6:
-        _recs.append(("fap_gpu_colab_headshots_700", "700 shapes, MAX_RES=900"))
-    elif _free_gib > 0:
-        _recs.append(("fap_gpu_colab_lineart_400", "400 shapes, MAX_RES=720"))
-    else:
-        _recs.append((None, "no CUDA available — runtime needs Hardware Accelerator: GPU"))
+    _rec = (None, "no CUDA available — Runtime → Change runtime type → Hardware accelerator: GPU.")
 
-print("RECOMMENDATION based on your environment:")
-for nb, desc in _recs:
-    if nb:
-        print(f"  → {nb}.ipynb  ({desc})")
-    else:
-        print(f"  → {desc}")
+print("RECOMMENDATION for this card:")
+if _rec[0]:
+    print(f"  → {_rec[0]}.ipynb  ({_rec[1]})")
+else:
+    print(f"  → {_rec[1]}")
 print()
-print("If you're not in the recommended notebook, open it instead of continuing here.")
-print("If you ARE in the recommended notebook (or accept the risk of a heavier one),")
-print("continue to the next cell.")
+print("Consumer gaming GPU (RTX 2080 → 5090, etc.) running FH6 alongside?")
+print("  → Don't use these notebooks. Use the EXE's in-app shape-gen instead.")
+print("    The EXE manages VRAM defensively for co-resident game scenarios.")
+print()
+print("If you're in the right notebook for your card, continue to the next cell.")
 '''
 
 
