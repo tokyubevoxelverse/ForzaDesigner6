@@ -188,18 +188,26 @@ class MainWindow(QMainWindow):
         quit_act.triggered.connect(self.close)
         file_menu.addAction(quit_act)
 
-        # ---- Tools menu — local GPU shape-gen entry point.
-        # First click triggers the runtime-install prompt (~4 GiB one-time
-        # download). Subsequent clicks open the Generate dialog directly.
-        # See forza_abyss_painter/runtime/ + gui/generate_dialog.py.
+        # ---- Tools menu ----
+        #
+        # The "Generate shapes locally (GPU)…" entry is gated behind
+        # GPU_PHASE_3_AVAILABLE. As of v1.0.x the dialogs (Phase 2) are
+        # SCAFFOLDING ONLY — Install + Generate buttons display "Phase 2
+        # scaffolding, Phase 3 not yet shipped" stubs and do nothing.
+        # Exposing the menu item in that state misleads testers into
+        # thinking the EXE is broken when they click it. The flag flips
+        # to True in the same commit that lands real Phase 3 plumbing
+        # (HTTP download + subprocess runner). See tasks #93-#96.
+        from forza_abyss_painter.gui.feature_flags import GPU_PHASE_3_AVAILABLE
         tools_menu = mbar.addMenu("&Tools")
-        generate_act = QAction("&Generate shapes locally (GPU)…", self)
-        generate_act.setStatusTip(
-            "Run the GPU shape-generator on your local CUDA card "
-            "(requires one-time ~4 GiB runtime download)"
-        )
-        generate_act.triggered.connect(self._on_generate_locally)
-        tools_menu.addAction(generate_act)
+        if GPU_PHASE_3_AVAILABLE:
+            generate_act = QAction("&Generate shapes locally (GPU)…", self)
+            generate_act.setStatusTip(
+                "Run the GPU shape-generator on your local CUDA card "
+                "(requires one-time ~4 GiB runtime download)"
+            )
+            generate_act.triggered.connect(self._on_generate_locally)
+            tools_menu.addAction(generate_act)
 
         # One-click fap-clean: load a JSON, strip padding-whites + dead
         # weight, save the cleaned file. Same library function the CLI
