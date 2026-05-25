@@ -22,13 +22,14 @@ Two phases inside this single dialog:
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QProgressBar,
-    QPushButton, QVBoxLayout,
+    QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QMessageBox,
+    QProgressBar, QPushButton, QVBoxLayout,
 )
 
+from forza_abyss_painter.gui.gpu_install_worker import GpuInstallWorker
 from forza_abyss_painter.runtime import torch_installer
 
 
@@ -101,33 +102,41 @@ class RuntimeInstallDialog(QDialog):
     # --------------------------------------------------- install-phase machinery
 
     def _on_install_clicked(self) -> None:
-        """User clicked Install — switch to install-phase UI, then trigger
-        the install. Phase 3 will replace the stub with a real worker
-        thread that streams download progress through `_on_progress`."""
+        """User clicked Install — switch to install-phase UI + spawn the
+        GpuInstallWorker on a QThread to actually run install_runtime().
+        Progress signals update the progress bar + status label;
+        done/error signals route to _on_install_done / _on_install_error
+        which set was_installed + close the dialog or surface a modal."""
         self.body.setText(
             "Installing GPU runtime — this can take 5–15 minutes depending on "
-            "your network speed. The dialog will close automatically when done."
+            "your network speed. The dialog will close automatically when done. "
+            "<br><br><i>Note: cancel during install isn't supported yet; the "
+            "Cancel button is disabled until completion. If something goes "
+            "wrong, manually delete the runtime directory and re-run.</i>"
         )
         self.progress.setVisible(True)
         self.status_label.setVisible(True)
         self.install_btn.setEnabled(False)
-        self.cancel_btn.setText("Abort")
+        # Cancel-during-install isn't safe (torch_installer's HTTP
+        # downloads aren't interruptible mid-stream without orphaning
+        # temp files). Disable until done; the dialog auto-closes on
+        # success or surfaces an error modal on failure.
+        self.cancel_btn.setEnabled(False)
 
-        # ---- PHASE 3 STUB ----
-        # Real implementation: spawn a QThread worker that calls
-        # torch_installer.install_runtime(progress_cb=self._on_progress).
-        # When done, emits a signal that calls self._on_install_done(success: bool).
-        # For now: surface a placeholder so the GUI flow is exercisable.
-        self.status_label.setText(
-            "(Phase 2 scaffolding — Phase 3 will plug in the real downloader.)"
-        )
-        # Simulate a finished-but-stubbed install so the caller can test the
-        # downstream "runtime is installed" path. NOT a real install — caller
-        # MUST check `is_runtime_installed()` separately before trusting.
-        self.was_installed = False
-        # Don't auto-close — let the user dismiss after reading the stub note.
-        self.install_btn.setVisible(False)
-        self.cancel_btn.setText("Close")
+        # Spawn the worker on a dedicated thread so the GUI stays
+        # responsive while torch wheels download. Hold both as instance
+        # attrs so the GC doesn't reap them mid-run.
+        self._thread = QThread(self)
+        self._worker = GpuInstallWorker()
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.progress.connect(self._on_progress)
+        self._worker.done.connect(self._on_install_done)
+        self._worker.error.connect(self._on_install_error)
+        self._worker.finished.connect(self._thread.quit)
+        self._worker.finished.connect(self._worker.deleteLater)
+        self._thread.finished.connect(self._thread.deleteLater)
+        self._thread.start()
 
     def _on_progress(self, percent: int, status: str) -> None:
         """Called by the install worker (Phase 3) on each download chunk /
@@ -136,16 +145,45 @@ class RuntimeInstallDialog(QDialog):
         self.progress.setValue(max(0, min(100, percent)))
         self.status_label.setText(status)
 
-    def _on_install_done(self, success: bool, message: str = "") -> None:
-        """Called by the install worker (Phase 3) on completion. Closes the
-        dialog with the right result code."""
-        self.was_installed = success
-        if success:
-            self.accept()
+    def _on_install_done(self, runtime_info_dict: dict) -> None:
+        """Worker emitted done(RuntimeInfo). Surface a brief success
+        state then auto-accept so the caller can immediately verify
+        via is_runtime_installed() + proceed to the Generate dialog."""
+        self.was_installed = True
+        cuda = runtime_info_dict.get("cuda_available", False)
+        device = runtime_info_dict.get("cuda_device_name", "")
+        torch_v = runtime_info_dict.get("torch_version", "")
+        if cuda:
+            self.status_label.setText(
+                f"Done — torch {torch_v} installed, CUDA ready on {device}"
+            )
         else:
-            self.status_label.setText(f"Install failed: {message}")
-            self.cancel_btn.setText("Close")
-            self.install_btn.setVisible(False)
+            # Partial install — torch landed but CUDA isn't reachable.
+            # The marker records this and is_runtime_installed() will
+            # return False, so the EXE doesn't try to GPU-generate.
+            self.status_label.setText(
+                f"Installed torch {torch_v} but CUDA isn't available — "
+                f"check your Nvidia driver version and try again."
+            )
+            self.was_installed = False
+        self.progress.setValue(100)
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(1500, self.accept)
+
+    def _on_install_error(self, stage: str, message: str) -> None:
+        """Worker emitted error(stage, message). Surface a modal with
+        the stage tag so the user knows which phase to investigate.
+        Leave the dialog open so they can dismiss after reading."""
+        self.was_installed = False
+        self.status_label.setText(f"Install failed at {stage}: {message}")
+        self.cancel_btn.setEnabled(True)
+        self.cancel_btn.setText("Close")
+        QMessageBox.critical(
+            self, f"GPU runtime install failed — {stage}",
+            f"Stage: {stage}\n\n{message}\n\n"
+            f"Try again, or use the Colab notebooks if your machine "
+            f"can't host the local runtime.",
+        )
 
 
 def prompt_install_or_use_existing(parent=None) -> bool:
