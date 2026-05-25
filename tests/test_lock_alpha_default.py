@@ -44,7 +44,7 @@ def test_every_production_notebook_hardcodes_lock_alpha_true_in_cfg():
     Forza injector (not a tunable). If anyone re-adds it as a Configure-cell knob,
     this test fails."""
     for nb_path in sorted(REPO_ROOT.glob(NOTEBOOK_GLOB)):
-        nb = json.loads(nb_path.read_text())
+        nb = json.loads(nb_path.read_text(encoding="utf-8"))
         src_all = "\n".join("".join(c.get("source", []))
                             for c in nb["cells"] if c["cell_type"] == "code")
         # The Configure cell must NOT define a user-editable LOCK_ALPHA knob.
@@ -66,7 +66,7 @@ def test_builder_setdefault_for_lock_alpha_is_true():
     """The builder's defensive default in cell_knobs() must be True. This is the safety
     net that catches new presets added by future contributors who forget the field —
     a False default would silently ship broken JSONs."""
-    builder_src = (REPO_ROOT / "notebooks" / "build_colab_notebook.py").read_text()
+    builder_src = (REPO_ROOT / "notebooks" / "build_colab_notebook.py").read_text(encoding="utf-8")
     # Match the setdefault line for lock_alpha. Allow whitespace + comment variants.
     m = re.search(r'setdefault\(\s*"lock_alpha"\s*,\s*(True|False)\s*\)', builder_src)
     assert m, "lock_alpha setdefault not found in build_colab_notebook.py"

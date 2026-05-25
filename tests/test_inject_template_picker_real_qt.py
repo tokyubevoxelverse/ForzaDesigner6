@@ -157,8 +157,13 @@ def test_main_window_truthiness_pattern_does_not_use_picker_Accepted():
     `picker.Accepted` (instance access on the picker variable) is banned."""
     import re
     from pathlib import Path
+    # encoding="utf-8" required — main_window.py contains smart-quote
+    # characters (eg in the About dialog text) that don't fit cp1252.
+    # Without the explicit encoding, Windows default decoder raises
+    # UnicodeDecodeError on the smart-quote bytes — CI build failure with
+    # no relation to the actual test logic.
     src = (Path(__file__).resolve().parent.parent /
-           "forza_abyss_painter" / "gui" / "main_window.py").read_text()
+           "forza_abyss_painter" / "gui" / "main_window.py").read_text(encoding="utf-8")
     # Strict pattern: word-boundary `picker.Accepted` anywhere in the source.
     matches = re.findall(r"\bpicker\.Accepted\b", src)
     assert not matches, (

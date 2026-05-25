@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "forza_abyss_painter"
-version = "0.1.0"
+version = "1.0.0"
 description = "Forza Abyss Painter — image to vinyl-group shapes for Forza Horizon 3-6 + Assetto Corsa Competizione"
 readme = "README.md"
 license = { file = "LICENSE" }

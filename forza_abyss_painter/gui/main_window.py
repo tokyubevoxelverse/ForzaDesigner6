@@ -521,10 +521,26 @@ class MainWindow(QMainWindow):
                 break
 
     def _show_about(self) -> None:
+        # Build provenance: BUILD_SHA / BUILD_TAG / BUILD_TIMESTAMP are written
+        # by CI immediately before PyInstaller bundles the EXE (see
+        # .github/workflows/release.yml). In a dev checkout the file ships
+        # placeholders ("dev" / "" / "") which we render as "dev build".
+        from forza_abyss_painter import _build_info
+        if _build_info.BUILD_SHA == "dev":
+            build_line = "<i>dev build (uncommitted local checkout)</i>"
+        else:
+            tag_part = f"{_build_info.BUILD_TAG} · " if _build_info.BUILD_TAG else ""
+            build_line = (
+                f"<i>{tag_part}commit "
+                f"<code>{_build_info.BUILD_SHA[:7]}</code>"
+                f"{' · ' + _build_info.BUILD_TIMESTAMP if _build_info.BUILD_TIMESTAMP else ''}"
+                f"</i>"
+            )
         QMessageBox.about(
             self,
             "About Forza Abyss Painter",
-            f"<b>Forza Abyss Painter</b><br>v0.1.0<br>"
+            f"<b>Forza Abyss Painter</b><br>v1.0.0<br>"
+            f"{build_line}<br><br>"
             f"<i>For Forza Horizon 3 / 4 / 5 / 6 (FH6 build {FH6_TARGET_BUILD}) "
             f"and Assetto Corsa Competizione</i><br><br>"
             "Vinyl-design tool for Forza Horizon 3-6 + Assetto Corsa Competizione. "

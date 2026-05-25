@@ -40,7 +40,7 @@ def _extract_load_image_bytes_from_notebook(nb_path: Path):
     afterward with notebook-level globals (SOURCE_IMAGE_NAME etc.) that aren't defined
     in our test context — so we ast-extract just the function and skip the call."""
     import ast
-    nb = json.loads(nb_path.read_text())
+    nb = json.loads(nb_path.read_text(encoding="utf-8"))
     for cell in nb["cells"]:
         if cell["cell_type"] != "code":
             continue

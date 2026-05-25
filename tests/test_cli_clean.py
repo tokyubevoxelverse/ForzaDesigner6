@@ -169,7 +169,7 @@ def test_cli_main_writes_cleaned_file(tmp_path: Path):
     assert rc == 0
     out = tmp_path / "input_cleaned.json"
     assert out.exists()
-    out_doc = json.loads(out.read_text())
+    out_doc = json.loads(out.read_text(encoding="utf-8"))
     assert out_doc["shape_count"] == 1
 
 
@@ -182,7 +182,7 @@ def test_cli_main_in_place_overwrites(tmp_path: Path):
     src.write_text(json.dumps(_doc(shapes)))
     rc = main([str(src), "--in-place"])
     assert rc == 0
-    out_doc = json.loads(src.read_text())
+    out_doc = json.loads(src.read_text(encoding="utf-8"))
     assert out_doc["shape_count"] == 1
 
 
@@ -196,7 +196,7 @@ def test_cli_main_report_mode_does_not_write(tmp_path: Path):
     # No _cleaned.json should exist
     assert not (tmp_path / "input_cleaned.json").exists()
     # Source unchanged
-    assert json.loads(src.read_text())["shape_count"] == len(shapes)
+    assert json.loads(src.read_text(encoding="utf-8"))["shape_count"] == len(shapes)
 
 
 def test_cli_main_inplace_and_output_are_mutually_exclusive(tmp_path: Path):

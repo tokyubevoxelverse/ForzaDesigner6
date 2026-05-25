@@ -23,7 +23,7 @@ BUILDER = Path(__file__).resolve().parents[1] / "notebooks" / "build_colab_noteb
 
 def _doc_template_keys() -> set[str]:
     """Read CELL_RUN's `def _doc(shapes)` body and return the dict keys it writes."""
-    src = BUILDER.read_text()
+    src = BUILDER.read_text(encoding="utf-8")
     # The helper is defined inside CELL_RUN as the only `def _doc(shapes):` literal.
     m = re.search(r"def _doc\(shapes\):.*?return\s*\{(.*?)\}", src, re.DOTALL)
     assert m, "could not locate `def _doc(shapes):` in build_colab_notebook.py"

@@ -52,7 +52,7 @@ _RUNTIME_ALLOWLIST = {
 def _extract_engine_cell(nb_path: Path) -> str:
     """Find the cell that inlines the GPU package (identified by the
     'inlined verbatim from forza_abyss_painter/shapegen/gpu/' preamble)."""
-    nb = json.loads(nb_path.read_text())
+    nb = json.loads(nb_path.read_text(encoding="utf-8"))
     for cell in nb["cells"]:
         if cell["cell_type"] != "code":
             continue

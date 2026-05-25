@@ -30,7 +30,7 @@ NOTEBOOK_PATH = REPO_ROOT / "notebooks" / "fap_gpu_colab_highres_3000.ipynb"
 
 
 def _extract_load_image_bytes(nb_path: Path):
-    nb = json.loads(nb_path.read_text())
+    nb = json.loads(nb_path.read_text(encoding="utf-8"))
     for cell in nb["cells"]:
         if cell["cell_type"] != "code": continue
         src = "".join(cell["source"])
@@ -147,7 +147,7 @@ def test_every_production_notebook_sets_UPLOAD_MAX_LONG_SIDE_to_720():
     preset get the same VRAM safety. (Users can edit per-run if they want.)"""
     import re
     for nb_path in sorted(REPO_ROOT.glob("notebooks/fap_gpu_colab_*.ipynb")):
-        nb = json.loads(nb_path.read_text())
+        nb = json.loads(nb_path.read_text(encoding="utf-8"))
         src_all = "\n".join("".join(c.get("source", []))
                             for c in nb["cells"] if c["cell_type"] == "code")
         m = re.search(r"UPLOAD_MAX_LONG_SIDE\s*=\s*(\d+)", src_all)

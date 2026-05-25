@@ -19,7 +19,7 @@ NOTEBOOK_GLOB = "notebooks/fap_gpu_colab_*.ipynb"
 
 
 def _all_code(nb_path: Path) -> str:
-    nb = json.loads(nb_path.read_text())
+    nb = json.loads(nb_path.read_text(encoding="utf-8"))
     return "\n".join(
         "".join(c.get("source", []))
         for c in nb["cells"]
