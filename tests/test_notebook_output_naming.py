@@ -2,7 +2,7 @@
 
 The output JSON + render PNG filenames must include the shape budget (NUM_SHAPES) so
 users can tell at a glance which quality tier a file belongs to — eg
-`nikke_rupee_3000.json` is the 3000-shape highres render vs `nikke_rupee_400.json` for
+`my_image_3000.json` is the 3000-shape highres render vs `my_image_400.json` for
 a 400-shape lineart render. Same for the render PNG and intermediate checkpoint files.
 
 If anyone reverts to `<stem>.json` (no budget tag) this test fails. If the convention

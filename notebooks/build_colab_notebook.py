@@ -48,7 +48,7 @@ beyond the pre-installed Colab stack.
    preserved), set `STICKER_MODE=True` in the *Run* cell.
 3. Run the *Run* cell — it generates shapes and writes `<stem>_<NUM_SHAPES>.json`
    + `<stem>_<NUM_SHAPES>_render.png` so you can tell at a glance which budget tier this
-   JSON belongs to (eg `nikke_rupee_3000.json` = high-detail vs `nikke_rupee_400.json` = lineart).
+   JSON belongs to (eg `my_image_3000.json` = high-detail vs `my_image_400.json` = lineart).
 4. The result is displayed inline. Download the JSON to ship to your Windows FH6 injector.
 
 **If you hit a CUDA OOM:** run the **Cleanup** cell (Section 3) and lower `RANDOM_SAMPLES`
@@ -119,10 +119,14 @@ def _inline_package_engine() -> str:
     )
     parts = [preamble]
     # Dependency order: engine imports all the others; bbox_score needs scoring; joint_polish
-    # needs shapes_gpu/rasterize/scoring. Keep this list complete or the notebook NameErrors.
-    # Inline order matters: each module's source is concatenated raw, so anything `engine` references
-    # must be inlined before `engine`.
-    for name in ["device", "rasterize", "scoring", "shapes_gpu", "bbox_score", "joint_polish", "engine"]:
+    # needs shapes_gpu/rasterize/scoring; refill needs joint_polish + bbox_score + shapes_gpu
+    # + rasterize + scoring + device, AND engine.run_gpu calls refill.clean_and_refill. Keep
+    # this list complete or the notebook NameErrors at runtime — exactly what task #74 was
+    # logged for (`name 'clean_and_refill' is not defined` after a 10-minute greedy run).
+    # Inline order matters: each module's source is concatenated raw, so anything `engine`
+    # references must be inlined before `engine`.
+    for name in ["device", "rasterize", "scoring", "shapes_gpu", "bbox_score",
+                 "joint_polish", "refill", "engine"]:
         parts.append(f"# ----- {name}.py -----\n" + _strip_module(GPU_PKG / f"{name}.py"))
     parts.append('DEVICE = get_device()\nprint(f"Engine loaded on {DEVICE}. Ready for image upload.")')
     return "\n\n".join(parts)
@@ -316,8 +320,25 @@ else:
     _vram_total = _vram_free = 0.0
     _gpu = "CPU (no CUDA)"
 
-_base_scale = min(1.0, 1200 / _long)
-_base_px = max(1, int(_sw * _base_scale)) * max(1, int(_sh * _base_scale))
+# Helper used by the probe table AND the hard breakpoint below. MUST stay in
+# sync with _load_image_bytes in the Run cell: the final canvas dims it returns
+# are exactly what gets handed to run_gpu, which is what the VRAM formula needs.
+# Math: effective_max = min(max_resolution, upload_cap); reserve padding budget
+# within that (PAD_FACTOR = 1 + 2*BUFFER_FRAC), scale source down to fit the
+# reserved input cap, then add pad_px to get the canvas the engine sees.
+_BUFFER_FRAC = 0.08
+_PAD_FACTOR = 1.0 + 2.0 * _BUFFER_FRAC
+def _capped_padded_dims(sw, sh, max_resolution, upload_cap):
+    eff_max = max_resolution if upload_cap <= 0 else min(max_resolution, upload_cap)
+    eff_in_max = max(1, int(eff_max / _PAD_FACTOR))
+    long = max(sw, sh)
+    scale = min(1.0, eff_in_max / long)
+    iw, ih = max(1, int(sw * scale)), max(1, int(sh * scale))
+    pad_px = max(8, int(round(max(iw, ih) * _BUFFER_FRAC)))
+    return iw + 2 * pad_px, ih + 2 * pad_px, scale < 1.0 or eff_max < max_resolution
+
+_base_pw, _base_ph, _ = _capped_padded_dims(_sw, _sh, 1200, UPLOAD_MAX_LONG_SIDE)
+_base_px = _base_pw * _base_ph
 
 _bbox_on = BBOX_LOCAL and REFINE_MODE == "gradient" and SHAPE_TYPES == ["rotated_ellipse"]
 # Effective batch size for memory: bbox scores all RANDOM_SAMPLES ellipses at once; the
@@ -330,31 +351,32 @@ _eff_k = RANDOM_SAMPLES if _bbox_on else max(1, RANDOM_SAMPLES // max(1, len(SHA
 _SAFETY = 5.5 if _bbox_on else 3.5
 print(f"GPU: {_gpu}   VRAM {_vram_total:.0f} GB total, ~{_vram_free:.0f} GB free")
 print(f"Source: {_sw}x{_sh} (long side {_long}px)   STICKER_MODE={STICKER_MODE}   "
-      f"RANDOM_SAMPLES={RANDOM_SAMPLES}   bbox_local={_bbox_on}\\n")
-print(f"{'MAX_RES':>8} | {'target':>11} | {'downscale':>9} | {'peak VRAM':>9} | {'time vs1200':>11} | fit")
-print("-" * 72)
+      f"RANDOM_SAMPLES={RANDOM_SAMPLES}   bbox_local={_bbox_on}")
+print(f"Upload cap: {UPLOAD_MAX_LONG_SIDE}px final padded long side (set UPLOAD_MAX_LONG_SIDE=0 to disable).\\n")
+print(f"{'MAX_RES':>8} | {'final canvas':>13} | {'downscale':>9} | {'peak VRAM':>9} | {'time vs1200':>11} | fit")
+print("-" * 76)
 
 _rec = 1200
 for _mr in (1200, 1600, 2000, 2400, 3000, 4000, 5000):
-    _scale = min(1.0, _mr / _long)
-    _dw, _dh = max(1, int(_sw * _scale)), max(1, int(_sh * _scale))
-    _px = _dw * _dh
+    # Final canvas dims = exactly what the engine sees (cap + reserve-for-pad + pad-added).
+    _pw, _ph, _capped = _capped_padded_dims(_sw, _sh, _mr, UPLOAD_MAX_LONG_SIDE)
+    _px = _pw * _ph
     # bbox-local scores each candidate over a crop (~max-radius sized), not the full canvas,
     # so the per-candidate memory footprint is the crop area, not _px.
     if _bbox_on:
-        _crop_e = min(256, max(_dw, _dh) // 8)
+        _crop_e = min(256, max(_pw, _ph) // 8)
         _foot = min((2 * _crop_e + 1) ** 2, _px)
     else:
         _foot = _px
     _peak = _eff_k * _foot * 3 * 4 * _SAFETY / 1e9
-    _ratio = _long / _mr if _scale < 1 else 1.0
+    _ratio = _long / max(_pw, _ph)
     _fits = (_vram_free <= 0) or (_peak < _vram_free * 0.85)
-    _is_upscale = _mr > _long
+    _is_upscale = _mr > _long and not _capped
     if _fits and not _is_upscale:
         _rec = _mr
-    _flag = ("OK " if _fits else "OOM") + (" (>=source)" if _is_upscale else "")
-    print(f"{_mr:>8} | {_dw:>4}x{_dh:<5} | {_ratio:>7.1f}x | {_peak:>7.1f}GB | {_px/_base_px:>9.1f}x | {_flag}")
-print("-" * 72)
+    _flag = ("OK " if _fits else "OOM") + (" (capped)" if _capped else (" (>=source)" if _is_upscale else ""))
+    print(f"{_mr:>8} | {_pw:>5}x{_ph:<7} | {_ratio:>7.1f}x | {_peak:>7.1f}GB | {_px/_base_px:>9.1f}x | {_flag}")
+print("-" * 76)
 # Detail saturates at the point where the smallest shapes map to real pixels. Past this,
 # higher resolution chases detail the shape budget can't reproduce — pure wasted compute.
 # Rule of thumb from the geometrize/primitive family: matched long side ~ sqrt(N) * 28.
@@ -366,13 +388,12 @@ print(f"Quality-matched suggestion: MAX_RESOLUTION ~= min({_rec}, {_matched}) = 
 print(f"You currently set: MAX_RESOLUTION = {MAX_RESOLUTION}")
 
 # --- Hard breakpoint ---
-_scale = min(1.0, MAX_RESOLUTION / _long)
-_dw, _dh = max(1, int(_sw * _scale)), max(1, int(_sh * _scale))
+_pw, _ph, _ = _capped_padded_dims(_sw, _sh, MAX_RESOLUTION, UPLOAD_MAX_LONG_SIDE)
 if _bbox_on:
-    _crop_e = min(256, max(_dw, _dh) // 8)
-    _foot = min((2 * _crop_e + 1) ** 2, _dw * _dh)
+    _crop_e = min(256, max(_pw, _ph) // 8)
+    _foot = min((2 * _crop_e + 1) ** 2, _pw * _ph)
 else:
-    _foot = _dw * _dh
+    _foot = _pw * _ph
 _peak = _eff_k * _foot * 3 * 4 * _SAFETY / 1e9
 if _vram_free > 0 and _peak > _vram_free * 0.85:
     raise SystemExit(
@@ -380,7 +401,7 @@ if _vram_free > 0 and _peak > _vram_free * 0.85:
         f"is free.\\n  Fix: set MAX_RESOLUTION={_rec} (or lower RANDOM_SAMPLES) in the Knobs cell, "
         f"re-run it, then re-run this planner."
     )
-print(f"\\nOK: MAX_RESOLUTION={MAX_RESOLUTION} -> target {_dw}x{_dh}, peak ~{_peak:.0f} GB. Proceed to Run.")
+print(f"\\nOK: MAX_RESOLUTION={MAX_RESOLUTION} -> final canvas {_pw}x{_ph}, peak ~{_peak:.0f} GB. Proceed to Run.")
 if _long > MAX_RESOLUTION:
     print(f"Detail note: downscaling {_long/MAX_RESOLUTION:.1f}x — features finer than "
           f"~{_long/MAX_RESOLUTION:.0f}px in the source won't survive. Bump MAX_RESOLUTION if you can afford it.")
@@ -411,13 +432,22 @@ def _load_image_bytes(name, raw, max_resolution, sticker, upload_cap=720):
     # 720 keeps every production preset comfortably under 20 GB peak. Effective ceiling =
     # min(preset's max_resolution, upload_cap). Setting upload_cap=0 disables the cap.
     effective_max = max_resolution if upload_cap <= 0 else min(max_resolution, upload_cap)
+    # The cap is meant as a ceiling on the FINAL PADDED canvas (that's what hits VRAM),
+    # not on the input image. Padding below adds ~2*BUFFER_FRAC*long pixels on top of
+    # the input. Reserve that budget within the cap so the post-padding canvas fits.
+    # Without this, a 720 cap with 8% padding leaked the final canvas up to ~836 px
+    # (720 + 2*58) and OOM'd a 102 GB GPU at ~99 GB peak vs the probe's predicted 65 GB.
+    BUFFER_FRAC = 0.08
+    PAD_FACTOR = 1.0 + 2.0 * BUFFER_FRAC
+    effective_input_max = max(1, int(effective_max / PAD_FACTOR))
     original_long = max(img.size)
-    if original_long > effective_max:
-        if effective_max < max_resolution:
-            print(f"[upload cap] long side {original_long} > {effective_max} (safety cap; "
-                  f"preset max_resolution={max_resolution}). Auto-resizing to {effective_max}.")
-    if max(img.size) > effective_max:
-        scale = effective_max / max(img.size)
+    if original_long > effective_input_max:
+        if effective_input_max < max_resolution:
+            print(f"[upload cap] long side {original_long} > {effective_input_max} "
+                  f"(input reserved under {effective_max}px final cap; "
+                  f"preset max_resolution={max_resolution}). Auto-resizing input to {effective_input_max}.")
+    if max(img.size) > effective_input_max:
+        scale = effective_input_max / max(img.size)
         new_size = (max(1, int(img.size[0] * scale)), max(1, int(img.size[1] * scale)))
         img = img.resize(new_size, Image.LANCZOS)
         if alpha_mask is not None:
@@ -429,7 +459,6 @@ def _load_image_bytes(name, raw, max_resolution, sticker, upload_cap=720):
     # smears and corner artifacts after injection. Pad the source ~8% per side so even
     # shapes that land on the outermost rows/cols of the content stay several pixels
     # inside the actual canvas edge.
-    BUFFER_FRAC = 0.08
     pad_px = max(8, int(round(max(img.size) * BUFFER_FRAC)))
     new_w = img.size[0] + 2 * pad_px
     new_h = img.size[1] + 2 * pad_px
@@ -515,8 +544,8 @@ def _doc(shapes):
     }
 
 # Output naming convention: include NUM_SHAPES (the shape budget) in every filename so
-# users can identify quality level at a glance — eg "nikke_rupee_3000.json" is a high-detail
-# render vs "nikke_rupee_400.json" for a lineart-density render. Budget is the planned shape
+# users can identify quality level at a glance — eg "my_image_3000.json" is a high-detail
+# render vs "my_image_400.json" for a lineart-density render. Budget is the planned shape
 # count even if the final actual count is slightly lower (sticker constraints can exhaust).
 _BUDGET_TAG = str(NUM_SHAPES)
 

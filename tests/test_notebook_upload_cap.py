@@ -1,15 +1,20 @@
-"""Regression test pinning the v0.1.5 input-size safety cap.
+"""Regression tests pinning the upload cap as a ceiling on the FINAL padded canvas.
 
-The notebook's `_load_image_bytes()` applies a hard ceiling on the input image's long
-side BEFORE the engine sees it. This prevents VRAM OOM on large source images by
-overriding the preset's max_resolution when it's larger than the safety cap (default 720).
+The notebook's `_load_image_bytes()` enforces a hard ceiling on what gets handed
+to run_gpu so users can't accidentally OOM the GPU by uploading a huge source.
+The v0.1.5 cap was implemented as a ceiling on the INPUT image, then padding
+(~8% per side) was added on top — which inflated the final canvas past the cap
+and OOM'd users despite a "safe" cap value. This test suite pins the FIXED
+contract: cap is a ceiling on the final padded canvas (= what the engine sees),
+not on the input image.
 
-Without this cap, large source images on high-resolution presets (eg highres_3000 with
-max_resolution=1600) push the bbox-local scorer past 80+ GB of VRAM on the dev GPU.
-The cap was added in v0.1.5 with UPLOAD_MAX_LONG_SIDE=720 as the default.
+Real-world repro that prompted the fix: 800px source, MAX_RESOLUTION=1000,
+UPLOAD_MAX_LONG_SIDE=720. Pre-fix: final canvas was 836x836, VRAM peaked at
+99 GB on a 102 GB GPU (vs probe's 65 GB prediction). Post-fix: final ≤ 720,
+probe matches reality.
 
-Tests exec only the `_load_image_bytes` function from a generated notebook (no notebook
-globals required, so the test is cross-platform)."""
+Tests exec only the `_load_image_bytes` function from a generated notebook (no
+notebook globals required, so the test is cross-platform)."""
 import ast
 import io
 import json
@@ -45,66 +50,96 @@ def _img_bytes(w, h, fill=(60, 130, 200)) -> bytes:
     return buf.getvalue()
 
 
-def test_upload_cap_downscales_oversized_source():
-    """Source larger than upload_cap → resized to cap regardless of preset's max_resolution."""
+def test_upload_cap_is_ceiling_on_final_padded_canvas():
+    """THE core contract: cap caps the FINAL padded canvas (= what hits VRAM),
+    not the input image. This is the bug the user OOM'd on — pre-fix, padding
+    leaked past the cap by ~16% (720 cap → 836 final on the user's repro)."""
     fn = _extract_load_image_bytes(NOTEBOOK_PATH)
-    # 2000x1200 source → cap at 720 long side. Source is larger than max_resolution too
-    # (1600) so the resize WOULD happen anyway; this test pins that the smaller cap wins.
     raw = _img_bytes(2000, 1200)
     target_rgb, _ = fn("test.png", raw, max_resolution=1600, sticker=False, upload_cap=720)
     h, w = target_rgb.shape[:2]
-    # Long side = 720, plus 8% padding per side.
-    pad = max(8, int(round(720 * 0.08)))
-    expected_long_side_padded = 720 + 2 * pad
-    assert max(h, w) == expected_long_side_padded, (
-        f"long side after cap+padding should be {expected_long_side_padded}, got {max(h,w)}"
+    assert max(h, w) <= 720, (
+        f"final padded long side must be ≤ cap (720); got {max(h, w)}. "
+        f"Padding is leaking past the cap."
+    )
+    # Sanity: cap should be ACTIVELY engaged (else the test passes vacuously).
+    assert max(h, w) > 600, (
+        f"cap should be engaged near 720; got tiny {max(h, w)} — fixture/cap mismatch"
+    )
+
+
+def test_user_repro_800px_source_max_1000_cap_720():
+    """Exact reproduction of the user's OOM repro that drove this fix.
+    800px source, MAX_RESOLUTION=1000, UPLOAD_MAX_LONG_SIDE=720."""
+    fn = _extract_load_image_bytes(NOTEBOOK_PATH)
+    raw = _img_bytes(800, 800)
+    target_rgb, _ = fn("test.png", raw, max_resolution=1000, sticker=False, upload_cap=720)
+    h, w = target_rgb.shape[:2]
+    assert max(h, w) <= 720, (
+        f"user-repro (800 src / max=1000 / cap=720): final={max(h, w)}, expected ≤720. "
+        f"Pre-fix this was 836 and OOM'd a 102 GB GPU."
     )
 
 
 def test_upload_cap_zero_disables_safety_cap():
-    """upload_cap=0 disables the safety cap — only max_resolution applies."""
+    """upload_cap=0 disables the safety cap entirely. Source goes through at
+    its native resolution (modulo max_resolution), then full padding added.
+    Final canvas = source + 2*pad with no ceiling enforced."""
     fn = _extract_load_image_bytes(NOTEBOOK_PATH)
-    # 1200x800 source, max_resolution=1600. With cap=0, source stays at 1200 (no resize).
     raw = _img_bytes(1200, 800)
     target_rgb, _ = fn("test.png", raw, max_resolution=1600, sticker=False, upload_cap=0)
     h, w = target_rgb.shape[:2]
-    pad = max(8, int(round(1200 * 0.08)))   # 96
+    pad = max(8, int(round(1200 * 0.08)))
     assert max(h, w) == 1200 + 2 * pad, (
         f"upload_cap=0 should let the source through unmodified; got long side {max(h,w)}"
     )
 
 
 def test_upload_cap_above_source_no_resize():
-    """If source is smaller than upload_cap, it stays at its native size."""
+    """If source is well under the cap, no input resize. Final = source + 2*pad
+    (which itself stays under the cap by construction)."""
     fn = _extract_load_image_bytes(NOTEBOOK_PATH)
-    raw = _img_bytes(500, 400)   # well under 720
+    raw = _img_bytes(500, 400)   # well under 720 even with padding
     target_rgb, _ = fn("test.png", raw, max_resolution=1600, sticker=False, upload_cap=720)
     h, w = target_rgb.shape[:2]
-    pad = max(8, int(round(500 * 0.08)))   # 40
+    pad = max(8, int(round(500 * 0.08)))
     assert max(h, w) == 500 + 2 * pad, (
         f"source under cap should stay at native size; got long side {max(h,w)}"
     )
 
 
 def test_upload_cap_smaller_than_max_resolution_wins():
-    """upload_cap < max_resolution → cap is the effective ceiling."""
+    """upload_cap < max_resolution → cap is the effective ceiling on FINAL canvas."""
     fn = _extract_load_image_bytes(NOTEBOOK_PATH)
     raw = _img_bytes(1500, 900)
     target_rgb, _ = fn("test.png", raw, max_resolution=1600, sticker=False, upload_cap=720)
-    pad = max(8, int(round(720 * 0.08)))
-    assert max(target_rgb.shape[:2]) == 720 + 2 * pad
+    assert max(target_rgb.shape[:2]) <= 720
 
 
 def test_upload_cap_default_is_720():
-    """The default upload_cap (when caller doesn't pass it) is 720."""
+    """Default upload_cap (when caller doesn't pass it) is 720. Final ≤ 720."""
     fn = _extract_load_image_bytes(NOTEBOOK_PATH)
     raw = _img_bytes(1500, 900)
-    # NO upload_cap kwarg — should use the default.
     target_rgb, _ = fn("test.png", raw, max_resolution=1600, sticker=False)
-    pad = max(8, int(round(720 * 0.08)))
-    assert max(target_rgb.shape[:2]) == 720 + 2 * pad, (
-        "default upload_cap should be 720"
+    assert max(target_rgb.shape[:2]) <= 720, (
+        f"default cap should be 720; got final {max(target_rgb.shape[:2])}"
     )
+
+
+def test_upload_cap_sticker_mode_also_respects_cap():
+    """Sticker mode uses a different padding code path (RGB + alpha mask)
+    — must respect the cap identically."""
+    fn = _extract_load_image_bytes(NOTEBOOK_PATH)
+    # Construct an RGBA source so sticker mode is valid.
+    buf = io.BytesIO()
+    img = Image.new("RGBA", (1500, 1500), (128, 128, 128, 255))
+    img.save(buf, format="PNG")
+    raw = buf.getvalue()
+    target_rgb, alpha = fn("test.png", raw, max_resolution=1600, sticker=True, upload_cap=720)
+    assert max(target_rgb.shape[:2]) <= 720
+    assert alpha is not None
+    # alpha mask must have the same dims as the RGB target.
+    assert alpha.shape == target_rgb.shape[:2]
 
 
 def test_every_production_notebook_sets_UPLOAD_MAX_LONG_SIDE_to_720():
