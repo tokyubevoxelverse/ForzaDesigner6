@@ -1,0 +1,119 @@
+name: release
+
+# Triggers:
+#   - Push a tag matching `v*` (eg `v1.0.0`, `v1.1.0-rc1`) → builds the
+#     Windows EXE and publishes a GitHub Release with the EXE attached.
+#   - workflow_dispatch (the "Run workflow" button on the Actions tab) →
+#     builds the EXE and uploads it as a workflow artifact only. Useful
+#     for verifying the build works without publishing a release.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# Required to create a release + upload the EXE asset.
+permissions:
+  contents: write
+
+jobs:
+  build-windows-exe:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Need full history so the auto-generated release notes can diff
+          # against the previous tag.
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          # Cache pip downloads keyed on requirements.txt — typical rebuild
+          # goes from ~4 min cold to ~90s warm.
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        # PyInstaller, PySide6, NumPy, Pillow, pytest — all in requirements.txt.
+        # The `pip install -e .` step is required so the package is on sys.path
+        # for the spec's hidden-imports walk to find every forza_abyss_painter
+        # module.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Run non-GUI tests
+        # Quick gate before burning ~5 min on a PyInstaller build. Skip GPU-
+        # path tests (require torch — not in the EXE bundle) and tests that
+        # need real Qt event loops (covered separately by smoke tests).
+        # If this fails, the build doesn't happen — saves wasted minutes.
+        run: |
+          pytest tests/ -q `
+            --ignore=tests/test_refill.py `
+            --ignore=tests/test_joint_polish_color_snap.py `
+            --ignore=tests/test_joint_polish_lock.py `
+            --ignore=tests/test_polish_freeze_geometry.py `
+            --ignore=tests/test_polish_purity_penalty.py `
+            --ignore=tests/test_run_gpu_alpha_lock.py `
+            --ignore=tests/test_sticker_render_parity.py `
+            --ignore=tests/test_notebook_inlined_engine.py `
+            --ignore-glob=tests/test_gpu_*.py
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+      - name: Build EXE with PyInstaller
+        # The spec file mirrors build_exe.bat declaratively. --noconfirm
+        # overwrites the prior dist/ output without prompting (CI is
+        # non-interactive). Output: dist/ForzaAbyssPainter.exe (~300 MB
+        # one-file with the PySide6 Qt runtime + media plugins).
+        run: pyinstaller --noconfirm ForzaAbyssPainter.spec
+
+      - name: Verify EXE was produced
+        # Fail fast if the build silently produced no EXE (eg spec parsing
+        # error). Show the file size in the log for sanity.
+        run: |
+          if (!(Test-Path dist\ForzaAbyssPainter.exe)) {
+            Write-Error "ForzaAbyssPainter.exe was not produced by PyInstaller"
+            exit 1
+          }
+          $size = (Get-Item dist\ForzaAbyssPainter.exe).Length
+          Write-Host "EXE built: dist\ForzaAbyssPainter.exe ($([math]::Round($size / 1MB, 1)) MB)"
+
+      - name: Upload EXE as workflow artifact
+        # Always upload as an artifact (useful for workflow_dispatch testing
+        # AND as a backup for tag-triggered runs). Retained for 90 days.
+        uses: actions/upload-artifact@v4
+        with:
+          name: ForzaAbyssPainter-${{ github.ref_name }}
+          path: dist/ForzaAbyssPainter.exe
+          retention-days: 90
+
+      - name: Create GitHub Release + attach EXE
+        # Only runs on tag push (not workflow_dispatch). Uses GitHub's
+        # auto-generated release notes (diff of commits since the previous
+        # tag) — no manual changelog maintenance required.
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/ForzaAbyssPainter.exe
+          generate_release_notes: true
+          # First-run warning: Windows SmartScreen will flag unsigned EXEs
+          # the first time users open them. This is normal for unsigned
+          # open-source builds — see README troubleshooting for the
+          # "More info → Run anyway" workaround.
+          body: |
+            ## Forza Abyss Painter `${{ github.ref_name }}`
+
+            **Download:** `ForzaAbyssPainter.exe` (Windows 10/11 x64, ~300 MB single-file)
+
+            **First-run note:** the EXE is unsigned (no code-signing certificate). Windows SmartScreen will warn on first open — click **More info** → **Run anyway**. This is normal for unsigned open-source builds; the binary in this release is built by GitHub Actions directly from this repo's source (see the workflow run linked in the auto-notes below for the exact commit + build environment).
+
+            **Run as administrator.** The injector calls `OpenProcess` / `ReadProcessMemory` / `WriteProcessMemory` against the FH6 UWP package. Without elevation, attach silently fails.
+
+            See [README.md](https://github.com/${{ github.repository }}#readme) for installation, the GPU notebook quickstart, and troubleshooting.
+
+            ---

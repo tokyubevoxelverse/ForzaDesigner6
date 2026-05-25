@@ -31,7 +31,13 @@ JSON save-files remain byte-compatible with upstream Forza Designer 6, so existi
 
 ## Install
 
-Releases are not yet published (initial v0.1.0 build pending). For now, build from source:
+**Easiest — download the prebuilt EXE.** Single-file Windows 10/11 x64 executable, no installer:
+
+1. Go to [Releases](https://github.com/whykusanagi/forza-abyss-painter/releases) and download the latest `ForzaAbyssPainter.exe`.
+2. Right-click the file → **Run as administrator** (required — see [Troubleshooting](#troubleshooting) for why).
+3. On first run, Windows SmartScreen warns about an unsigned binary. Click **More info** → **Run anyway**. The release EXE is built by GitHub Actions directly from this repo's source (see the workflow run linked in each release for the exact build commit).
+
+**Build from source (advanced):**
 
 ```bash
 git clone https://github.com/whykusanagi/forza-abyss-painter.git
@@ -41,14 +47,12 @@ pip install -e .
 python -m forza_abyss_painter
 ```
 
-Windows EXE build (PyInstaller):
+Windows EXE build:
 
 ```cmd
 build_exe.bat
 :: produces dist\ForzaAbyssPainter.exe
 ```
-
-Once v0.1.0 ships, download `ForzaAbyssPainter.exe` from [Releases](https://github.com/whykusanagi/forza-abyss-painter/releases) — single-file, no installer.
 
 ## GPU shape-gen notebooks
 
@@ -65,6 +69,57 @@ Six production presets + one test harness, all in `notebooks/`. Run any of them 
 | `fap_test_harness.ipynb` | varies | Stage-by-stage parity verification (engine, CPU, injector) |
 
 Each notebook installs from this repo (`pip install git+https://github.com/whykusanagi/forza-abyss-painter.git@main`), inlines the GPU engine, and saves output JSON + PNG straight to Google Drive so a Colab session reset can't lose your work.
+
+📖 **Full notebook walkthrough:** [docs/NOTEBOOK_QUICKSTART.md](docs/NOTEBOOK_QUICKSTART.md) — which preset to pick, upload→run→download flow, OOM recovery, Free vs Pro Colab VRAM tiers.
+
+## Troubleshooting
+
+### Inject can't find Forza Horizon 6
+
+> *"Forza Horizon 6 is not running (looked for: forzahorizon6.exe, ForzaHorizon6-Win64-Shipping.exe). Start the game and try again."*
+
+- **Most common cause: not running as administrator.** FH6 ships as a UWP package; non-elevated processes can't open a handle on it. Right-click `ForzaAbyssPainter.exe` → **Run as administrator** and retry. Inject will fail silently the same way if launched normally.
+- Game actually not running? Open FH6 and wait for the main menu before clicking Inject.
+- If you renamed the EXE or it's running through a wrapper, the process name might not match. The injector looks for `forzahorizon6.exe` (UWP build) and `ForzaHorizon6-Win64-Shipping.exe` (alternate). Open Task Manager → Details → confirm one of those names is alive.
+
+### Inject scan takes 30+ seconds
+
+That's expected on current FH6 builds. The fast-mode signature chain falls through to the heap-fingerprint scan because the chain anchor in the game image is currently an incidental `.rdata` match, not the live chain root (see the inject log for the full per-gate diagnostic). The heap scan typically completes in ~30s for a 1000-shape template, longer for larger templates. We're tracking a fix for the signature chain itself.
+
+### "Active vinyl group is GROUPED" error
+
+> *"Active vinyl group is GROUPED. Multiple slots alias the same layer blob… In FH6: Select All → Ungroup in the vinyl editor, then retry."*
+
+In the vinyl editor, select every shape (Ctrl+A or the in-game select-all) and choose **Ungroup**. Grouped templates have shared underlying memory — writing to them would corrupt every slot identically. Re-inject after ungrouping.
+
+### "Active vinyl group has only N slots, but the JSON has M shapes"
+
+The template you have loaded is smaller than your JSON. Open the FH6 vinyl editor's Create Vinyl Group menu and pick a larger template (FH6 offers 10 / 20 / 50 / 100 / 500 / 1000 / 1500 / 3000-sphere templates). The template needs ≥ your JSON's shape count. Re-inject.
+
+### Where's the inject log?
+
+Persistent per-run log written to `%LOCALAPPDATA%\ForzaAbyssPainter\logs\inject-YYYYMMDD-HHMMSS.log`. The inject dialog also shows the path in its footer and has an **Open log folder** button after the run finishes. Every status line, per-gate `[fast-locate]` / `[readiness]` diagnostic, and progress milestone is captured — useful when reporting an issue.
+
+### Notebook CUDA OOM
+
+Colab's free T4 has 16 GB VRAM; Pro V100/A100/L4 have 16-40 GB. The notebooks default to settings tuned for ~24 GB+. If you OOM:
+
+1. Run the **Cleanup** cell (Section 3 in every notebook) to free CUDA memory.
+2. Lower `MAX_RESOLUTION` in the Configure cell (try 720 → 480 → 360).
+3. Lower `RANDOM_SAMPLES` (try halving it).
+4. Restart the runtime if the cleanup cell can't get allocated memory under ~10 GB.
+
+See [docs/NOTEBOOK_QUICKSTART.md § VRAM tiers](docs/NOTEBOOK_QUICKSTART.md#vram-tiers) for per-Colab-tier recommended settings.
+
+### Inject succeeds but shapes look wrong in-game
+
+- **Sticker mode mismatch:** if you generated the JSON with `STICKER_MODE=True` (transparent background), the shapes are positioned for an alpha-cutout silhouette. Injecting into a non-sticker context will look offset. Regenerate with `STICKER_MODE=False`.
+- **Coordinate convention:** FH6's vinyl editor uses an inverted Y axis. The injector handles this automatically — if shapes appear mirrored vertically, you're likely on a JSON exported from a tool that wasn't aware of the convention.
+- **Pre-paint residue:** the template's pre-existing low-index shapes (slots 1-10) may show through. In the vinyl editor's layer panel, delete or move them to behind the injected design.
+
+### Splash video doesn't play
+
+The app needs `SplashScreen.mp4` next to the EXE. If you renamed/moved the file or extracted the EXE from an archive that dropped it, the app skips the splash silently and goes straight to the main window. Not fatal — just no intro.
 
 ## Differences from upstream
 
