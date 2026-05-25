@@ -86,6 +86,13 @@ class MainWindow(QMainWindow):
         self.settings_panel.pause_clicked.connect(self._toggle_pause)
         self.settings_panel.stop_clicked.connect(self._stop_current)
         self.settings_panel.inject_clicked.connect(self._on_inject_clicked)
+        # Backend selector: if user picks GPU but it's not installed,
+        # auto-open the install dialog. After it closes (success or
+        # cancel), refresh the dropdown label so the user sees the new
+        # state immediately.
+        self.settings_panel.gpu_install_requested.connect(
+            self._on_gpu_install_requested
+        )
         # AC path
         self.ac_settings.export_clicked.connect(self._on_ac_export_clicked)
 
@@ -693,9 +700,11 @@ class MainWindow(QMainWindow):
         )
         dlg = RuntimeInstallDialog(self)
         dlg.exec()
-        # Refresh the status bar GPU label so the user sees the result
-        # of the install they just ran without needing to restart.
+        # Refresh BOTH GPU indicators (status bar + settings dropdown)
+        # so the user sees the result of the install they just ran
+        # without needing to restart the EXE.
         self._refresh_gpu_status_indicator()
+        self.settings_panel.refresh_backend_state()
         if dlg.was_installed:
             self.statusBar().showMessage(
                 "GPU runtime installed — ready to Generate.", 6000,
@@ -847,6 +856,17 @@ class MainWindow(QMainWindow):
         # When ON (default), we composite transparent areas onto white before generation.
         # When OFF, transparent areas remain transparent and don't get shapes.
         add_white_bg = self.settings_panel.sticker_mode_cb.isChecked()
+
+        # Branch on user-selected backend. CPU path is the original
+        # in-process GenerationWorker with live shape-by-shape preview.
+        # GPU path subprocess'es torch_runner via GpuGenWorker — no
+        # live preview (subprocess writes JSON at the end), but it's
+        # 5-30× faster. See settings_panel for the selector.
+        backend = self.settings_panel.selected_backend()
+        if backend == "gpu":
+            self._start_gpu(next_path, profile, sticker_mode=not add_white_bg)
+            return
+
         self._worker = GenerationWorker(next_path, profile, sticker_mode=not add_white_bg)
         self._thread = QThread(self)
         self._worker.moveToThread(self._thread)
@@ -859,6 +879,114 @@ class MainWindow(QMainWindow):
         self._thread.start()
         self.settings_panel.set_running(True)
         self.statusBar().showMessage(f"Generating: {next_path.name}")
+
+    def _start_gpu(self, image_path: Path, profile, sticker_mode: bool) -> None:
+        """GPU shape-gen path. Writes an IPC config + spawns GpuGenWorker
+        in a QThread. Progress shows in the status bar (no live preview
+        — subprocess writes the final JSON at the end). On done: load
+        the JSON into the preview pane via the same _on_json_loaded
+        flow Upload JSON uses, so the user gets identical post-gen UX
+        regardless of backend."""
+        import json as _json
+        from forza_abyss_painter.gui.gpu_gen_worker import GpuGenWorker
+        from forza_abyss_painter.runtime.torch_installer import (
+            embedded_python_exe, is_runtime_installed,
+        )
+        if not is_runtime_installed():
+            # Defensive — settings panel should have prompted install,
+            # but the user may have cancelled. Surface a clear modal.
+            QMessageBox.warning(
+                self, "GPU runtime not installed",
+                "Pick 'GPU' from 'Generate using:' and accept the runtime "
+                "install when prompted, then click Start again.",
+            )
+            self.queue.set_status(image_path, "queued")
+            return
+        # Build a preset dict matching gpu_gen_worker.build_run_config()'s
+        # expected fields. Source values from the SettingsPanel so what
+        # the user picked in CPU mode carries over to GPU.
+        preset = {
+            "label": profile.name,
+            "num_shapes": profile.stop_at,
+            "max_resolution": profile.max_resolution,
+            "random_samples": profile.random_samples,
+        }
+        from forza_abyss_painter.gui.gpu_gen_worker import build_run_config
+        output_path = image_path.parent / image_path.stem / f"{image_path.stem}.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        config = build_run_config(image_path, output_path, preset,
+                                    sticker_mode=sticker_mode)
+        config_path = image_path.parent / f".{image_path.stem}_gpu_config.json"
+        try:
+            config_path.write_text(_json.dumps(config, indent=2),
+                                    encoding="utf-8")
+        except OSError as exc:
+            QMessageBox.critical(
+                self, "Couldn't start GPU run",
+                f"Failed to write GPU config: {exc}",
+            )
+            self.queue.set_status(image_path, "queued")
+            return
+        self._worker = GpuGenWorker(
+            embedded_python_exe=embedded_python_exe(),
+            config_path=config_path,
+        )
+        self._thread = QThread(self)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.progress.connect(self._on_gpu_progress)
+        self._worker.checkpoint.connect(self._on_gpu_progress)
+        self._worker.done.connect(self._on_gpu_done)
+        self._worker.error.connect(self._on_gpu_error)
+        self._worker.finished.connect(self._teardown_thread)
+        self._thread.start()
+        self.settings_panel.set_running(True)
+        self.statusBar().showMessage(
+            f"GPU generating: {image_path.name} (no live preview — "
+            f"final result loads when done)"
+        )
+
+    def _on_gpu_progress(self, shape_count: int, total: int) -> None:
+        if total > 0:
+            pct = max(0, min(100, int(100 * shape_count / total)))
+            self.statusBar().showMessage(
+                f"GPU: shape {shape_count} of {total} ({pct}%)"
+            )
+
+    def _on_gpu_done(self, output_path: str, shape_count: int) -> None:
+        if self._current_path:
+            self.queue.set_status(self._current_path, "done")
+        out = Path(output_path)
+        self._last_finished_json = out
+        self.statusBar().showMessage(
+            f"GPU done — {shape_count} shapes saved to {out.name}", 8000,
+        )
+        # Auto-load into preview via the same path Upload JSON uses,
+        # so the user immediately sees the result + can inject.
+        self._on_json_loaded_for_preview(out)
+        self.upload.mark_json_ready(out)
+
+    def _on_gpu_error(self, stage: str, message: str) -> None:
+        if self._current_path:
+            self.queue.set_status(self._current_path, "error")
+        QMessageBox.critical(
+            self, f"GPU generation failed — {stage}",
+            f"Stage: {stage}\n\n{message}\n\n"
+            f"For post-mortem: Tools → Save diagnostics zip…",
+        )
+
+    def _on_gpu_install_requested(self) -> None:
+        """SettingsPanel emitted gpu_install_requested — user picked GPU
+        from the backend dropdown but the runtime isn't installed. Open
+        the install dialog; on close, refresh the dropdown label so the
+        user sees the new state."""
+        from forza_abyss_painter.gui.runtime_install_dialog import (
+            RuntimeInstallDialog,
+        )
+        dlg = RuntimeInstallDialog(self)
+        dlg.exec()
+        self.settings_panel.refresh_backend_state()
+        self._refresh_gpu_status_indicator()
 
     def _on_finished(self, out_path: str) -> None:
         if self._current_path:

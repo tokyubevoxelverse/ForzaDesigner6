@@ -29,11 +29,40 @@ class SettingsPanel(QWidget):
     pause_clicked = Signal()
     stop_clicked = Signal()
     inject_clicked = Signal()
+    backend_changed = Signal(str)   # "cpu" or "gpu"
+    gpu_install_requested = Signal()  # user picked GPU but it's not installed
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
+
+        # Generation backend selector — front-and-center so users SEE
+        # that GPU is an option without having to discover it in the
+        # Tools menu. The label text updates dynamically to reflect
+        # install state so users know whether GPU is ready to use or
+        # needs a one-time install first. Without this row, GPU was a
+        # hidden feature 95% of users never found.
+        backend_row = QHBoxLayout()
+        backend_label = QLabel("Generate using:")
+        backend_label.setToolTip(
+            "CPU runs the built-in shape generator (always available, slower). "
+            "GPU runs the CUDA-accelerated generator in an isolated subprocess "
+            "(5-30x faster, requires a one-time ~4 GiB runtime download on first "
+            "use). The label updates to show your current GPU runtime state."
+        )
+        backend_row.addWidget(backend_label)
+        self.backend_combo = QComboBox(self)
+        self.backend_combo.setToolTip(backend_label.toolTip())
+        # Indexes pin the values (currentData would be cleaner but the
+        # rest of the file uses currentIndex pattern; stay consistent).
+        self.backend_combo.addItem("CPU (built-in)", userData="cpu")
+        self.backend_combo.addItem("GPU (loading…)", userData="gpu")
+        self.backend_combo.currentIndexChanged.connect(self._on_backend_changed)
+        backend_row.addWidget(self.backend_combo, stretch=1)
+        layout.addLayout(backend_row)
+        # Populate the GPU label based on current install state.
+        self._refresh_gpu_backend_label()
 
         # Profile picker
         prof_row = QHBoxLayout()
@@ -234,6 +263,76 @@ class SettingsPanel(QWidget):
 
         # Apply initial profile
         self._on_profile_changed(self.profile_combo.currentIndex())
+
+    def selected_backend(self) -> str:
+        """Return 'cpu' or 'gpu' — which shape-gen backend the user
+        picked. Main window's Start handler routes accordingly."""
+        data = self.backend_combo.currentData()
+        return str(data) if data else "cpu"
+
+    def refresh_backend_state(self) -> None:
+        """Public hook to re-poll the GPU runtime install state. Call
+        this after the install dialog closes so the dropdown label
+        updates immediately ('GPU (Install required…)' → 'GPU — RTX
+        4090')."""
+        self._refresh_gpu_backend_label()
+
+    def _refresh_gpu_backend_label(self) -> None:
+        """Sync the GPU dropdown entry's label with the actual runtime
+        state. Three states:
+          - flag disabled OR no marker:  'GPU (Install required…)'
+          - marker present, cuda False:  'GPU (install incomplete)'
+          - marker present, cuda True:   'GPU — {device name}'
+        """
+        from forza_abyss_painter.gui.feature_flags import GPU_PHASE_3_AVAILABLE
+        # Find the GPU row (we added it at index 1).
+        gpu_idx = -1
+        for i in range(self.backend_combo.count()):
+            if self.backend_combo.itemData(i) == "gpu":
+                gpu_idx = i
+                break
+        if gpu_idx < 0:
+            return
+        if not GPU_PHASE_3_AVAILABLE:
+            # Flag disabled = no GPU UI at all; remove the row entirely
+            # so the dropdown doesn't show a useless option.
+            self.backend_combo.removeItem(gpu_idx)
+            return
+        from forza_abyss_painter.runtime.torch_installer import (
+            installed_runtime_info,
+        )
+        info = installed_runtime_info()
+        if info is None:
+            label = "GPU (Install required…)"
+        elif not info.cuda_available:
+            label = "GPU (install incomplete — re-install)"
+        else:
+            device = info.cuda_device_name or "CUDA device"
+            label = f"GPU — {device}"
+        # blockSignals while editing so we don't fire backend_changed
+        # for a label-only update.
+        self.backend_combo.blockSignals(True)
+        self.backend_combo.setItemText(gpu_idx, label)
+        self.backend_combo.blockSignals(False)
+
+    def _on_backend_changed(self, _idx: int) -> None:
+        """User picked CPU or GPU. If they picked GPU but it's not
+        installed, emit gpu_install_requested so the main window opens
+        the install dialog. After the dialog closes, main_window calls
+        refresh_backend_state to update our label."""
+        backend = self.selected_backend()
+        if backend == "gpu":
+            from forza_abyss_painter.runtime.torch_installer import (
+                is_runtime_installed,
+            )
+            if not is_runtime_installed():
+                self.gpu_install_requested.emit()
+                # Don't auto-revert — let the user decide via the install
+                # dialog. If they cancel, _refresh_gpu_backend_label gets
+                # called from main_window and the label still says
+                # "Install required…", which makes it clear Start won't
+                # actually GPU-generate yet.
+        self.backend_changed.emit(backend)
 
     def selected_target_profile_key(self) -> str:
         """Return the key ('fh6'/'fh5'/'fh4') of the currently picked injection target."""
