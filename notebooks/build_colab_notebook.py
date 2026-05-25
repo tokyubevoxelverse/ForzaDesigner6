@@ -33,10 +33,25 @@ def md(src: str) -> dict:
     }
 
 
-CELL_INTRO = """# Forza Abyss Painter — GPU Shape-Gen — Colab Edition
+# GitHub raw URL for the logo. Works once the repo is public; loads with zero
+# notebook-size overhead (vs base64-embedding which would add ~470 KB per
+# notebook × 6 = ~3 MB). The `?raw=true` form is canonical for GitHub-hosted
+# binary assets and is what Colab markdown renders correctly.
+_LOGO_RAW_URL = (
+    "https://raw.githubusercontent.com/whykusanagi/"
+    "forza-abyss-painter/main/assets/forza_abyss_painter_logo.png"
+)
+_REPO_URL = "https://github.com/whykusanagi/forza-abyss-painter"
+
+CELL_INTRO = f"""<div align="center" style="background: linear-gradient(135deg, #0a0a0a 0%, #1a0a1f 100%); padding: 32px 24px; border-radius: 8px; border: 1px solid #3a2555; margin-bottom: 16px;">
+  <img src="{_LOGO_RAW_URL}" alt="Forza Abyss Painter" width="180" style="margin-bottom: 16px;"/>
+  <h1 style="color: #d94f90; margin: 0; font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-weight: 700; letter-spacing: 0.5px;">Forza Abyss Painter</h1>
+  <p style="color: #a78bfa; margin: 8px 0 0 0; font-size: 14px; font-family: -apple-system, BlinkMacSystemFont, monospace;">GPU Shape-Gen · Colab Edition</p>
+  <p style="color: #6a6a6a; margin: 4px 0 0 0; font-size: 12px;"><a href="{_REPO_URL}" style="color: #8b5cf6; text-decoration: none;">github.com/whykusanagi/forza-abyss-painter</a></p>
+</div>
 
 This notebook runs the Forza Abyss Painter GPU shape-generator on CUDA.
-It mirrors the macOS CLI (`forza_abyss_painter.cli.oneshot`) but is self-contained — no clone, no install
+It mirrors the desktop CLI (`forza_abyss_painter.cli.oneshot`) but is self-contained — no clone, no install
 beyond the pre-installed Colab stack.
 
 **Before running:** switch the runtime to a GPU.
@@ -55,6 +70,14 @@ beyond the pre-installed Colab stack.
 or `MUTATIONS_PER_ROUND`. Memory cost scales as `K * H * W * 12 bytes` per intermediate,
 with 2-3 intermediates live. Restart runtime if the cleanup cell can't get allocation under
 ~10 GB.
+"""
+
+# Footer cell appended to every notebook — small credit banner with the
+# corrupted-theme colors so the visual identity bookends the workflow.
+CELL_FOOTER = f"""<div align="center" style="margin-top: 32px; padding: 16px; border-top: 1px solid #3a2555; color: #6a6a6a; font-size: 12px;">
+  <p style="margin: 0;">made with <strong style="color: #d94f90;">Forza Abyss Painter</strong></p>
+  <p style="margin: 4px 0 0 0;"><a href="{_REPO_URL}" style="color: #8b5cf6; text-decoration: none;">github.com/whykusanagi/forza-abyss-painter</a> · MIT</p>
+</div>
 """
 
 CELL_SETUP_DEPS = """# --- Environment check ---
@@ -710,6 +733,7 @@ def build(preset_key):
             code(CELL_DISPLAY),
             md("## 11. (Optional) browser download\n\nYour files are already on Drive. This just pushes a local copy to your browser too — safe to skip, and it won't matter if the session later resets."),
             code(CELL_DOWNLOAD),
+            md(CELL_FOOTER),
         ],
         "metadata": {
             "accelerator": "GPU",
