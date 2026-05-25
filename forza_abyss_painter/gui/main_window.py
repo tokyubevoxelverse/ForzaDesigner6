@@ -5,7 +5,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QThread
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
-    QHBoxLayout, QMainWindow, QMessageBox, QSplitter, QStackedWidget, QStatusBar, QVBoxLayout, QWidget
+    QHBoxLayout, QLabel, QMainWindow, QMessageBox, QSplitter, QStackedWidget, QStatusBar, QVBoxLayout, QWidget
 )
 
 from forza_abyss_painter.gui.ac_settings_panel import ACSettingsPanel
@@ -29,6 +29,15 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Forza Abyss Painter — Inject custom decals and vinyls into various racing titles")
         self.resize(1280, 760)
         self.setStatusBar(QStatusBar(self))
+        # Permanent GPU status indicator on the right side of the status
+        # bar — always visible, always reflects current install state.
+        # Refreshed after the install dialog closes + on construction.
+        # See _refresh_gpu_status_indicator for the state machine.
+        self._gpu_status_label = QLabel("")
+        self._gpu_status_label.setStyleSheet(
+            "padding: 0 8px; color: #888; font-size: 11px;"
+        )
+        self.statusBar().addPermanentWidget(self._gpu_status_label)
         self._apply_dark_palette()
 
         # Suite mode — read persisted choice; default Forza on first launch.
@@ -155,6 +164,49 @@ class MainWindow(QMainWindow):
             for act in self._music_vol_group.actions():
                 act.setEnabled(False)
 
+        # Initial population of the GPU status indicator. Reads
+        # is_runtime_installed() + the install marker if present;
+        # post-install refreshes from _on_install_gpu_runtime.
+        self._refresh_gpu_status_indicator()
+
+    def _refresh_gpu_status_indicator(self) -> None:
+        """Update the permanent status-bar GPU label based on current
+        install state. Called at construction time + every time the
+        install dialog closes so the user sees state transitions
+        without needing to restart the EXE.
+
+        State machine:
+          - GPU_PHASE_3_AVAILABLE=False → label hidden (no GPU UX yet)
+          - Marker missing                → "GPU: not installed"
+          - Marker present, cuda False    → "GPU: install incomplete"
+          - Marker present, cuda True     → "GPU: ready ({device})"
+        """
+        from forza_abyss_painter.gui.feature_flags import GPU_PHASE_3_AVAILABLE
+        if not GPU_PHASE_3_AVAILABLE:
+            self._gpu_status_label.setVisible(False)
+            return
+        self._gpu_status_label.setVisible(True)
+        from forza_abyss_painter.runtime.torch_installer import (
+            installed_runtime_info, is_runtime_installed,
+        )
+        info = installed_runtime_info()
+        if info is None:
+            self._gpu_status_label.setText("GPU: not installed")
+            self._gpu_status_label.setStyleSheet(
+                "padding: 0 8px; color: #888; font-size: 11px;"
+            )
+        elif not info.cuda_available:
+            self._gpu_status_label.setText("GPU: install incomplete (CPU-only torch)")
+            self._gpu_status_label.setStyleSheet(
+                "padding: 0 8px; color: #c97a4f; font-size: 11px;"
+            )
+        else:
+            device = info.cuda_device_name or "CUDA device"
+            self._gpu_status_label.setText(f"GPU: ready — {device}")
+            self._gpu_status_label.setStyleSheet(
+                "padding: 0 8px; color: #6fbf73; font-size: 11px;"
+            )
+
     def start_music(self) -> None:
         """Begin background music. Call once, after the splash has finished, to
         avoid two QMediaPlayer audio streams colliding during splash teardown."""
@@ -190,17 +242,25 @@ class MainWindow(QMainWindow):
 
         # ---- Tools menu ----
         #
-        # The "Generate shapes locally (GPU)…" entry is gated behind
-        # GPU_PHASE_3_AVAILABLE. As of v1.0.x the dialogs (Phase 2) are
-        # SCAFFOLDING ONLY — Install + Generate buttons display "Phase 2
-        # scaffolding, Phase 3 not yet shipped" stubs and do nothing.
-        # Exposing the menu item in that state misleads testers into
-        # thinking the EXE is broken when they click it. The flag flips
-        # to True in the same commit that lands real Phase 3 plumbing
-        # (HTTP download + subprocess runner). See tasks #93-#96.
+        # GPU entries are gated behind GPU_PHASE_3_AVAILABLE. The flag
+        # is True once the install + generate plumbing is real (tasks
+        # #93-#96 + #102-#104 logging/diagnostics). See feature_flags.py.
         from forza_abyss_painter.gui.feature_flags import GPU_PHASE_3_AVAILABLE
         tools_menu = mbar.addMenu("&Tools")
         if GPU_PHASE_3_AVAILABLE:
+            # Install runtime — direct entry point. Users can pre-install
+            # without going through Generate, and re-install if their
+            # marker shows partial (cuda_available=False) state.
+            install_act = QAction("&Install GPU runtime…", self)
+            install_act.setStatusTip(
+                "Download and install the local GPU shape-gen runtime "
+                "(~4 GiB; one-time)"
+            )
+            install_act.triggered.connect(self._on_install_gpu_runtime)
+            tools_menu.addAction(install_act)
+            # Generate — the workflow entry point. If runtime isn't yet
+            # installed, this also prompts for install before showing
+            # the Generate dialog.
             generate_act = QAction("&Generate shapes locally (GPU)…", self)
             generate_act.setStatusTip(
                 "Run the GPU shape-generator on your local CUDA card "
@@ -208,6 +268,7 @@ class MainWindow(QMainWindow):
             )
             generate_act.triggered.connect(self._on_generate_locally)
             tools_menu.addAction(generate_act)
+            tools_menu.addSeparator()
 
         # One-click fap-clean: load a JSON, strip padding-whites + dead
         # weight, save the cleaned file. Same library function the CLI
@@ -619,6 +680,26 @@ class MainWindow(QMainWindow):
             "Inject the most recent shapes into a running FH6 vinyl group."
         )
         self.settings_panel.inject_btn.setToolTip(tip)
+
+    def _on_install_gpu_runtime(self) -> None:
+        """Tools menu → Install GPU runtime. Direct entry point — opens
+        the install dialog regardless of current install state so users
+        can install fresh or re-install over a partial state.
+
+        After the dialog closes, refresh the status indicator so the
+        user immediately sees the new GPU state."""
+        from forza_abyss_painter.gui.runtime_install_dialog import (
+            RuntimeInstallDialog,
+        )
+        dlg = RuntimeInstallDialog(self)
+        dlg.exec()
+        # Refresh the status bar GPU label so the user sees the result
+        # of the install they just ran without needing to restart.
+        self._refresh_gpu_status_indicator()
+        if dlg.was_installed:
+            self.statusBar().showMessage(
+                "GPU runtime installed — ready to Generate.", 6000,
+            )
 
     def _on_generate_locally(self) -> None:
         """Tools menu → Generate shapes locally. Lazy-import the dialog so

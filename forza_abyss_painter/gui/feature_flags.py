@@ -20,4 +20,4 @@ from __future__ import annotations
 # stub messages and do nothing. Flip to True in the same commit that
 # wires the real HTTP downloader + embedded-Python bootstrap +
 # subprocess shape-gen runner (tasks #93-#96).
-GPU_PHASE_3_AVAILABLE: bool = False
+GPU_PHASE_3_AVAILABLE: bool = True

@@ -37,35 +37,34 @@ def _no_block_messageboxes(monkeypatch):
     yield
 
 
-def test_gpu_phase3_flag_is_currently_false():
-    """Phase 3 plumbing (real HTTP download + subprocess runner) has
-    NOT landed yet. The flag stays False until the same commit that
-    wires both. If someone bumps this to True they MUST also bump
-    test_tools_menu_includes_generate_when_flag_enabled to pass.
+def test_gpu_phase3_flag_is_currently_true():
+    """Phase 3 plumbing landed (tasks #93-#96 + #102-#104 all green
+    locally + smoke-tested), so the flag is True and the Windows
+    tester can REACH the install + generate UI surface. Real Windows
+    validation produces diagnostic-bundle logs via Tools → Save
+    diagnostics zip; we post-mortem from macOS using those.
 
-    Flip checklist (NOT to be merged piecemeal):
-      - real install_runtime() in torch_installer.py (task #93)
-      - real torch_runner.py subprocess entry point (task #94)
-      - Generate button wired through QThread (task #95)
-      - Install button wired through QThread (task #96)
-      - All four green on a real Windows tester build
+    If a regression takes this back to False, ensure the Tools menu
+    test (test_tools_menu_includes_generate_when_flag_enabled) is
+    updated to match — the two tests are paired so a drift surfaces
+    loudly.
     """
     from forza_abyss_painter.gui.feature_flags import GPU_PHASE_3_AVAILABLE
-    assert GPU_PHASE_3_AVAILABLE is False, (
-        "GPU_PHASE_3_AVAILABLE flipped to True — Phase 3 plumbing MUST "
-        "land in the same commit. See the docstring above for the flip "
-        "checklist."
+    assert GPU_PHASE_3_AVAILABLE is True, (
+        "GPU_PHASE_3_AVAILABLE reverted to False — the Windows tester "
+        "loses the GPU UI surface entirely. If this is intentional "
+        "(known-broken state, rolling back to stub), also revert the "
+        "Tools menu visibility test below."
     )
 
 
-def test_tools_menu_hides_generate_when_flag_disabled():
-    """With the flag False, the Tools menu must NOT include the GPU
-    Generate item — clicking a stub button would mislead testers into
-    thinking the EXE is broken. Only 'Clean current JSON…' should be
-    visible (it's a fully-functional feature)."""
+def test_tools_menu_includes_generate_when_flag_enabled():
+    """With the flag True, the Tools menu MUST include the GPU Generate
+    item — that's the user's entry point into the install + generate
+    flow. Without it the EXE plumbing is unreachable from the UI."""
     from forza_abyss_painter.gui import feature_flags as ff
-    assert ff.GPU_PHASE_3_AVAILABLE is False, (
-        "fixture sanity — this test only meaningful when flag is False"
+    assert ff.GPU_PHASE_3_AVAILABLE is True, (
+        "fixture sanity — this test only meaningful when flag is True"
     )
     from forza_abyss_painter.gui.main_window import MainWindow
     window = MainWindow()
@@ -80,54 +79,23 @@ def test_tools_menu_hides_generate_when_flag_disabled():
         assert tools_menu is not None, "Tools menu missing entirely"
         item_texts = [a.text().replace("&", "")
                       for a in tools_menu.actions() if not a.isSeparator()]
+        # Both Generate and Clean items must be present in the rendered menu.
+        assert any("Generate shapes locally" in t for t in item_texts), (
+            f"GPU Generate item missing despite GPU_PHASE_3_AVAILABLE=True — "
+            f"Tools menu items: {item_texts}. The Windows tester can't "
+            f"reach the GPU UI surface from the rendered EXE."
+        )
         assert "Clean current JSON…" in item_texts, (
             f"Clean menu item missing — Tools menu items: {item_texts}"
         )
-        assert not any("Generate shapes locally" in t for t in item_texts), (
-            f"GPU Generate item rendered despite GPU_PHASE_3_AVAILABLE=False — "
-            f"Tools menu items: {item_texts}. Feature flag gate isn't working "
-            f"and the SMB build would ship a stub button to the tester."
+        # Install runtime item should also be present so users can
+        # re-install or pre-install before clicking Generate.
+        assert any("Install GPU runtime" in t for t in item_texts), (
+            f"Install GPU runtime item missing — without it, users can "
+            f"only trigger install indirectly via Generate. Tools menu "
+            f"items: {item_texts}"
         )
     finally:
         window.close()
         window.deleteLater()
 
-
-@pytest.mark.skip(
-    reason="Qt-lifetime issue when constructing a second MainWindow in the "
-           "same test session — the previous test's deleteLater() queue fires "
-           "during this test's menu iteration. Will be re-enabled by the "
-           "Phase 3 PR (tasks #93-#96) when the flag genuinely flips and we "
-           "can verify the positive branch without monkeypatching."
-)
-def test_tools_menu_includes_generate_when_flag_enabled(monkeypatch):
-    """Forward-compat: when Phase 3 lands and the flag flips True, the
-    Generate item SHOULD render. Monkeypatch the flag for the duration
-    of this test so we can verify the gate's positive branch works
-    without an actual code change. If this test fails AFTER a real
-    flag flip, the gate logic in main_window.py is broken."""
-    from forza_abyss_painter.gui import feature_flags as ff
-    monkeypatch.setattr(ff, "GPU_PHASE_3_AVAILABLE", True)
-    # MainWindow imports the flag at _build_menus time inside the method
-    # (we put the import there specifically so monkeypatch works without
-    # reload), so a fresh construction picks up the patched value.
-    from forza_abyss_painter.gui.main_window import MainWindow
-    window = MainWindow()
-    try:
-        mbar = window.menuBar()
-        tools_menu = next(
-            (a.menu() for a in mbar.actions()
-             if a.menu() and a.text().replace("&", "") == "Tools"),
-            None,
-        )
-        assert tools_menu is not None
-        item_texts = [a.text().replace("&", "")
-                      for a in tools_menu.actions() if not a.isSeparator()]
-        assert any("Generate shapes locally" in t for t in item_texts), (
-            f"flag flipped to True but Generate item didn't render — "
-            f"items: {item_texts}. Gate logic broken."
-        )
-        assert "Clean current JSON…" in item_texts
-    finally:
-        window.close()
-        window.deleteLater()
