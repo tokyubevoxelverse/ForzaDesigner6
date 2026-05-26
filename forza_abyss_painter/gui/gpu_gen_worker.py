@@ -419,3 +419,34 @@ def build_run_config(
         # rasterize lands (#129), this is the only safe path.
         "bbox_local": True,
     }
+
+
+def build_polish_config(
+    source_image_path: Path,
+    input_shapes_path: Path,
+    output_path: Path,
+    steps: int,
+    lock_alpha: bool = True,
+    sticker_mode: bool = False,
+) -> dict:
+    """Map PolishDialog values + paths → torch_runner RunConfig dict
+    with mode='polish_only'. Sibling to build_run_config for #86.
+
+    num_shapes / max_resolution / random_samples are intentionally
+    omitted — RunConfig.from_dict treats them as optional under
+    polish_only and ignores them at the runner level (canvas dims come
+    from the loaded JSON's image_size).
+    """
+    return {
+        "image_path": str(source_image_path),
+        "output_json_path": str(output_path),
+        "mode": "polish_only",
+        "input_shapes_path": str(input_shapes_path),
+        "polish_steps_override": int(steps),
+        "lock_alpha": bool(lock_alpha),
+        "sticker_mode": bool(sticker_mode),
+        # Hold to the same defensive defaults the fresh builder applies.
+        "bbox_local": True,
+        "vram_budget_gib": 0.0,
+        "preset_label": "polish_only",
+    }
