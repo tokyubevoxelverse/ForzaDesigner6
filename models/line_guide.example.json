@@ -1,0 +1,13 @@
+{
+  "input": {
+    "colorOrder": "rgb",
+    "valueRange": "0_1"
+  },
+  "output": {
+    "index": 0,
+    "channel": "auto",
+    "activation": "auto",
+    "invert": false
+  },
+  "maxResolution": 1024
+}

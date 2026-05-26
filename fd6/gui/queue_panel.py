@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -12,10 +13,19 @@ from PySide6.QtWidgets import (
 @dataclass
 class QueueItem:
     path: Path
+    path_key: str
     status: str = "queued"  # queued | running | done | error
 
 
 STATUS_ICON = {"queued": "⏳", "running": "▶", "done": "✓", "error": "✗"}
+
+
+def _normalize_path(path: Path) -> Path:
+    return path.expanduser().resolve(strict=False)
+
+
+def _path_key(path: Path) -> str:
+    return os.path.normcase(os.path.normpath(str(_normalize_path(path))))
 
 
 class QueueRow(QWidget):
@@ -94,25 +104,39 @@ class QueuePanel(QWidget):
         return w if isinstance(w, QueueRow) else None
 
     def _index_of(self, path: Path) -> int:
+        key = _path_key(path)
         for i, it in enumerate(self._items):
-            if it.path == path:
+            if it.path_key == key:
                 return i
         return -1
 
     # ------------------------------------------------------- public API
 
-    def add(self, path: Path) -> None:
-        item = QueueItem(path=path)
+    def add(self, path: Path) -> bool:
+        normalized = _normalize_path(path)
+        path_key = _path_key(normalized)
+        idx = self._index_of(normalized)
+        if idx >= 0:
+            status = self._items[idx].status
+            if status in ("queued", "running"):
+                return False
+            self._items[idx].status = "queued"
+            row = self._row_widget_at(idx)
+            if row is not None:
+                row.set_status("queued")
+            return True
+        item = QueueItem(path=normalized, path_key=path_key)
         self._items.append(item)
         li = QListWidgetItem()
-        li.setData(Qt.UserRole, str(path))
-        row = QueueRow(path, self.list)
+        li.setData(Qt.UserRole, str(normalized))
+        row = QueueRow(normalized, self.list)
         row.remove_requested.connect(self._on_row_remove)
         # Size hint must match the row's preferred height so the list lays out
         # widgets without clipping the X button.
         li.setSizeHint(row.sizeHint())
         self.list.addItem(li)
         self.list.setItemWidget(li, row)
+        return True
 
     def set_status(self, path: Path, status: str) -> None:
         idx = self._index_of(path)

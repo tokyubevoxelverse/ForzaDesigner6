@@ -1,5 +1,5 @@
 @echo off
-REM Build a single-file FD6.exe with PyInstaller.
+REM Build a directory-based FD6 package with PyInstaller.
 REM Run from the FD6\ directory after `pip install -r requirements.txt`.
 
 setlocal
@@ -7,13 +7,15 @@ cd /d "%~dp0"
 
 pyinstaller ^
     --noconfirm ^
-    --onefile ^
+    --onedir ^
     --windowed ^
     --name "FD64FH6354221" ^
     --icon "tools\fd6.ico" ^
     --add-data "fd6\settings\profiles;fd6\settings\profiles" ^
     --add-data "fd6\inject\patterns;fd6\inject\patterns" ^
-    --add-data "SplashScreen.mp4;." ^
+    --add-data "LICENSE;." ^
+    --add-data "NOTICE;." ^
+    --add-data "THIRD_PARTY_NOTICES.md;." ^
     --add-data "Song1OpenSource.mp3;." ^
     --add-data "Song2OpenSource.mp3;." ^
     --add-data "Song3OpenSource.mp3;." ^
@@ -48,15 +50,30 @@ pyinstaller ^
     --hidden-import fd6.inject.rtti_locator ^
     --hidden-import fd6.gui.inject_worker ^
     --hidden-import fd6.gui.inject_dialog ^
-    --hidden-import fd6.gui.splash ^
     --hidden-import fd6.gui.brand_banner ^
     --hidden-import fd6.gui.themes ^
     --hidden-import fd6.shapegen.render ^
     --hidden-import PySide6.QtMultimedia ^
     --hidden-import PySide6.QtMultimediaWidgets ^
+    --hidden-import torch ^
+    --hidden-import cupy ^
+    --collect-submodules torch ^
+    --collect-data torch ^
+    --collect-binaries torch ^
+    --collect-submodules cupy ^
+    --collect-data cupy ^
+    --collect-binaries cupy ^
+    --collect-submodules cupy_backends ^
+    --collect-data cupy_backends ^
+    --collect-binaries cupy_backends ^
+    --exclude-module onnxruntime ^
     -p . ^
     fd6\__main__.py
 
+copy /Y "LICENSE" "dist\FD64FH6354221\LICENSE" >nul
+copy /Y "NOTICE" "dist\FD64FH6354221\NOTICE" >nul
+copy /Y "THIRD_PARTY_NOTICES.md" "dist\FD64FH6354221\THIRD_PARTY_NOTICES.md" >nul
+
 echo.
-echo Built: dist\FD64FH6354221.exe
+echo Built: dist\FD64FH6354221\
 endlocal

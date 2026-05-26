@@ -31,8 +31,7 @@ class Circle(Shape):
         return (mask.astype(np.uint8) * 255), bbox
 
     def mutate(self, rng: random.Random, w: int, h: int) -> "Circle":
-        from copy import copy as shallow_copy
-        new = shallow_copy(self)
+        new = self._copy_for_mutation()
         which = rng.randint(0, 1)
         if which == 0:
             new.x = _clamp(new.x + rng.gauss(0, 16), 0, w - 1)

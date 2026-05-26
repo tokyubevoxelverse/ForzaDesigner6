@@ -51,6 +51,14 @@ class Shape(ABC):
     def random(cls, rng: random.Random, w: int, h: int) -> "Shape":
         ...
 
+    def _copy_for_mutation(self) -> "Shape":
+        from copy import copy as shallow_copy
+        new = shallow_copy(self)
+        for name in tuple(vars(new)):
+            if name.startswith("_fd6_") and name.endswith("_cache"):
+                delattr(new, name)
+        return new
+
     def with_color(self, color: tuple[int, int, int, int]) -> "Shape":
         from copy import copy as shallow_copy
         new = shallow_copy(self)
@@ -62,6 +70,32 @@ def random_shape(rng: random.Random, w: int, h: int, allowed_types: list[ShapeTy
     type_name = rng.choice(allowed_types)
     cls = SHAPE_REGISTRY[type_name]
     return cls.random(rng, w, h)
+
+
+def cached_bbox_metrics(shape: Shape, w: int, h: int) -> tuple[tuple[int, int, int, int], int, int, int]:
+    cache = getattr(shape, "_fd6_bbox_cache", None)
+    if (
+        isinstance(cache, tuple)
+        and len(cache) >= 4
+        and cache[0] == w
+        and cache[1] == h
+    ):
+        bbox = cache[2]
+        area = cache[3]
+        if len(cache) >= 6:
+            width = cache[4]
+            height = cache[5]
+        else:
+            width = max(0, bbox[2] - bbox[0])
+            height = max(0, bbox[3] - bbox[1])
+            setattr(shape, "_fd6_bbox_cache", (w, h, bbox, area, width, height))
+        return bbox, area, width, height
+    bbox = shape.bbox(w, h)
+    width = max(0, bbox[2] - bbox[0])
+    height = max(0, bbox[3] - bbox[1])
+    area = max(0, width * height)
+    setattr(shape, "_fd6_bbox_cache", (w, h, bbox, area, width, height))
+    return bbox, area, width, height
 
 
 def shape_from_json(data: dict) -> Shape:

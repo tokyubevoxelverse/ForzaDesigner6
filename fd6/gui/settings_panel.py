@@ -4,8 +4,8 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
-    QPushButton, QSpinBox, QVBoxLayout, QWidget
+    QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox,
+    QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QVBoxLayout, QWidget
 )
 
 from fd6.shapegen.profile import Profile, load_profile_from_file, list_bundled_profiles
@@ -18,6 +18,12 @@ SHAPE_TYPE_CHOICES = [
     ("triangle", "Triangle"),
     ("rectangle", "Rectangle"),
     ("rotated_rectangle", "Rotated Rectangle"),
+]
+
+COMPUTE_BACKEND_CHOICES = [
+    ("auto", "Auto"),
+    ("cpu", "CPU"),
+    ("gpu", "GPU (CUDA)"),
 ]
 
 
@@ -50,17 +56,24 @@ class SettingsPanel(QWidget):
         self.stop_at = QSpinBox(); self.stop_at.setRange(10, 50000); self.stop_at.setValue(3000)
         self.random_samples = QSpinBox(); self.random_samples.setRange(10, 50000); self.random_samples.setValue(1000)
         self.mutated_samples = QSpinBox(); self.mutated_samples.setRange(1, 5000); self.mutated_samples.setValue(200)
+        self.refine_passes = QSpinBox(); self.refine_passes.setRange(0, 10); self.refine_passes.setValue(0)
         self.max_resolution = QSpinBox(); self.max_resolution.setRange(100, 4096); self.max_resolution.setValue(1200)
         self.max_threads = QSpinBox(); self.max_threads.setRange(0, 64); self.max_threads.setValue(0)
-        self.preview_every = QSpinBox(); self.preview_every.setRange(1, 100); self.preview_every.setValue(1)
+        self.compute_backend = QComboBox(self)
+        for value, label in COMPUTE_BACKEND_CHOICES:
+            self.compute_backend.addItem(label, value)
+        self.preview_every = QSpinBox(); self.preview_every.setRange(1, 100); self.preview_every.setValue(10)
         form.addRow("Stop at shapes", self.stop_at)
         form.addRow("Random samples", self.random_samples)
         form.addRow("Mutated samples", self.mutated_samples)
+        form.addRow("Post-refine passes", self.refine_passes)
         form.addRow("Max resolution (px)", self.max_resolution)
         form.addRow("Threads (0=auto)", self.max_threads)
+        form.addRow("Compute", self.compute_backend)
         form.addRow("Preview every N", self.preview_every)
-        for w in (self.stop_at, self.random_samples, self.mutated_samples, self.max_resolution, self.max_threads, self.preview_every):
+        for w in (self.stop_at, self.random_samples, self.mutated_samples, self.refine_passes, self.max_resolution, self.max_threads, self.preview_every):
             w.valueChanged.connect(self._on_adv_changed)
+        self.compute_backend.currentIndexChanged.connect(self._on_adv_changed)
         layout.addWidget(adv)
 
         # Sticker mode toggle
@@ -77,13 +90,87 @@ class SettingsPanel(QWidget):
         sg_layout.addWidget(self.sticker_mode_cb)
         layout.addWidget(sticker_group)
 
+        line_group = QGroupBox("Line guide", self)
+        line_form = QFormLayout(line_group)
+        self.line_guide_enabled = QCheckBox("Use line guide", line_group)
+        self.line_guide_enabled.setToolTip(
+            "Use an external line image or an optional ONNX model to guide edge candidates. "
+            "Generation continues without it if the file or runtime is unavailable."
+        )
+        self.line_guide_image_path = QLineEdit(line_group)
+        self.line_guide_image_path.setPlaceholderText("Optional line image")
+        self.line_guide_image_btn = QPushButton("Browse", line_group)
+        self.line_guide_image_btn.clicked.connect(self._browse_line_guide_image)
+        image_row = QHBoxLayout()
+        image_row.addWidget(self.line_guide_image_path, stretch=1)
+        image_row.addWidget(self.line_guide_image_btn)
+        self.line_guide_model_path = QLineEdit(line_group)
+        self.line_guide_model_path.setPlaceholderText("models/line_guide.onnx")
+        self.line_guide_model_btn = QPushButton("Browse", line_group)
+        self.line_guide_model_btn.clicked.connect(self._browse_line_guide_model)
+        model_row = QHBoxLayout()
+        model_row.addWidget(self.line_guide_model_path, stretch=1)
+        model_row.addWidget(self.line_guide_model_btn)
+        self.line_guide_strength = QDoubleSpinBox(line_group)
+        self.line_guide_strength.setRange(0.0, 4.0)
+        self.line_guide_strength.setSingleStep(0.05)
+        self.line_guide_strength.setDecimals(2)
+        self.line_guide_strength.setValue(0.75)
+        self.line_guide_decay = QDoubleSpinBox(line_group)
+        self.line_guide_decay.setRange(0.05, 2.0)
+        self.line_guide_decay.setSingleStep(0.05)
+        self.line_guide_decay.setDecimals(2)
+        self.line_guide_decay.setValue(0.55)
+        self.line_guide_agreement = QDoubleSpinBox(line_group)
+        self.line_guide_agreement.setRange(0.0, 1.0)
+        self.line_guide_agreement.setSingleStep(0.05)
+        self.line_guide_agreement.setDecimals(2)
+        self.line_guide_agreement.setValue(0.65)
+        self.line_guide_candidate_ratio = QDoubleSpinBox(line_group)
+        self.line_guide_candidate_ratio.setRange(0.0, 1.0)
+        self.line_guide_candidate_ratio.setSingleStep(0.05)
+        self.line_guide_candidate_ratio.setDecimals(2)
+        self.line_guide_candidate_ratio.setValue(0.22)
+        self.quality_batch_pixels = QSpinBox(line_group)
+        self.quality_batch_pixels.setRange(0, 100_000_000)
+        self.quality_batch_pixels.setSingleStep(64_000)
+        self.quality_batch_pixels.setValue(0)
+        self.line_guide_max_resolution = QSpinBox(line_group)
+        self.line_guide_max_resolution.setRange(128, 4096)
+        self.line_guide_max_resolution.setValue(1024)
+        self.line_guide_status = QLabel("Line guide: not loaded.", line_group)
+        self.line_guide_status.setWordWrap(True)
+        line_form.addRow("Enable", self.line_guide_enabled)
+        line_form.addRow("Guide image", image_row)
+        line_form.addRow("ONNX model", model_row)
+        line_form.addRow("Strength", self.line_guide_strength)
+        line_form.addRow("Decay", self.line_guide_decay)
+        line_form.addRow("Agreement", self.line_guide_agreement)
+        line_form.addRow("Candidate ratio", self.line_guide_candidate_ratio)
+        line_form.addRow("Quality batch px", self.quality_batch_pixels)
+        line_form.addRow("Guide max size", self.line_guide_max_resolution)
+        line_form.addRow("Status", self.line_guide_status)
+        self.line_guide_enabled.stateChanged.connect(self._on_adv_changed)
+        self.line_guide_image_path.textChanged.connect(self._on_adv_changed)
+        self.line_guide_model_path.textChanged.connect(self._on_adv_changed)
+        for w in (
+            self.line_guide_strength,
+            self.line_guide_decay,
+            self.line_guide_agreement,
+            self.line_guide_candidate_ratio,
+            self.quality_batch_pixels,
+            self.line_guide_max_resolution,
+        ):
+            w.valueChanged.connect(self._on_adv_changed)
+        layout.addWidget(line_group)
+
         # Shape types
         types_group = QGroupBox("Shape types", self)
         tg_layout = QVBoxLayout(types_group)
         self._shape_checks: dict[str, QCheckBox] = {}
         for code, label in SHAPE_TYPE_CHOICES:
             cb = QCheckBox(label, types_group)
-            cb.setChecked(code == "rotated_ellipse")
+            cb.setChecked(True)
             cb.stateChanged.connect(self._on_adv_changed)
             tg_layout.addWidget(cb)
             self._shape_checks[code] = cb
@@ -141,6 +228,26 @@ class SettingsPanel(QWidget):
         data = self.target_combo.currentData()
         return str(data) if data else "fh6"
 
+    def _browse_line_guide_image(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Pick line guide image",
+            self.line_guide_image_path.text(),
+            "Images (*.png *.jpg *.jpeg *.bmp *.webp);;All files (*)",
+        )
+        if path:
+            self.line_guide_image_path.setText(path)
+
+    def _browse_line_guide_model(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Pick ONNX line guide model",
+            self.line_guide_model_path.text(),
+            "ONNX models (*.onnx);;All files (*)",
+        )
+        if path:
+            self.line_guide_model_path.setText(path)
+
     def _on_target_changed(self, idx: int) -> None:
         if idx < 0 or idx >= len(self._target_profiles):
             return
@@ -177,15 +284,53 @@ class SettingsPanel(QWidget):
         except Exception:
             return
         # Mirror into advanced widgets without re-emitting per-spinbox.
-        for w in (self.stop_at, self.random_samples, self.mutated_samples, self.max_resolution, self.max_threads, self.preview_every):
+        for w in (self.stop_at, self.random_samples, self.mutated_samples, self.refine_passes, self.max_resolution, self.max_threads, self.preview_every):
+            w.blockSignals(True)
+        self.compute_backend.blockSignals(True)
+        for w in (
+            self.line_guide_enabled,
+            self.line_guide_image_path,
+            self.line_guide_model_path,
+            self.line_guide_strength,
+            self.line_guide_decay,
+            self.line_guide_agreement,
+            self.line_guide_candidate_ratio,
+            self.quality_batch_pixels,
+            self.line_guide_max_resolution,
+        ):
             w.blockSignals(True)
         self.stop_at.setValue(prof.stop_at)
         self.random_samples.setValue(prof.random_samples)
         self.mutated_samples.setValue(prof.mutated_samples)
+        self.refine_passes.setValue(prof.refine_passes)
         self.max_resolution.setValue(prof.max_resolution)
         self.max_threads.setValue(prof.max_threads)
+        backend_idx = max(0, self.compute_backend.findData(prof.compute_backend))
+        self.compute_backend.setCurrentIndex(backend_idx)
         self.preview_every.setValue(prof.preview_every)
-        for w in (self.stop_at, self.random_samples, self.mutated_samples, self.max_resolution, self.max_threads, self.preview_every):
+        self.line_guide_enabled.setChecked(prof.line_guide_enabled)
+        self.line_guide_image_path.setText(prof.line_guide_image_path)
+        self.line_guide_model_path.setText(prof.line_guide_model_path)
+        self.line_guide_strength.setValue(prof.line_guide_strength)
+        self.line_guide_decay.setValue(prof.line_guide_decay)
+        self.line_guide_agreement.setValue(prof.line_guide_agreement)
+        self.line_guide_candidate_ratio.setValue(prof.line_guide_candidate_ratio)
+        self.quality_batch_pixels.setValue(prof.quality_batch_pixels)
+        self.line_guide_max_resolution.setValue(prof.line_guide_max_resolution)
+        for w in (self.stop_at, self.random_samples, self.mutated_samples, self.refine_passes, self.max_resolution, self.max_threads, self.preview_every):
+            w.blockSignals(False)
+        self.compute_backend.blockSignals(False)
+        for w in (
+            self.line_guide_enabled,
+            self.line_guide_image_path,
+            self.line_guide_model_path,
+            self.line_guide_strength,
+            self.line_guide_decay,
+            self.line_guide_agreement,
+            self.line_guide_candidate_ratio,
+            self.quality_batch_pixels,
+            self.line_guide_max_resolution,
+        ):
             w.blockSignals(False)
         for code, cb in self._shape_checks.items():
             cb.blockSignals(True)
@@ -208,11 +353,25 @@ class SettingsPanel(QWidget):
         base.stop_at = self.stop_at.value()
         base.random_samples = self.random_samples.value()
         base.mutated_samples = self.mutated_samples.value()
+        base.refine_passes = self.refine_passes.value()
         base.max_resolution = self.max_resolution.value()
         base.max_threads = self.max_threads.value()
+        base.compute_backend = str(self.compute_backend.currentData() or "auto")
         base.preview_every = self.preview_every.value()
+        base.line_guide_enabled = self.line_guide_enabled.isChecked()
+        base.line_guide_image_path = self.line_guide_image_path.text().strip()
+        base.line_guide_model_path = self.line_guide_model_path.text().strip()
+        base.line_guide_strength = self.line_guide_strength.value()
+        base.line_guide_decay = self.line_guide_decay.value()
+        base.line_guide_agreement = self.line_guide_agreement.value()
+        base.line_guide_candidate_ratio = self.line_guide_candidate_ratio.value()
+        base.quality_batch_pixels = self.quality_batch_pixels.value()
+        base.line_guide_max_resolution = self.line_guide_max_resolution.value()
         base.shape_types = [code for code, cb in self._shape_checks.items() if cb.isChecked()] or ["rotated_ellipse"]
         return base
+
+    def set_line_guide_status(self, message: str) -> None:
+        self.line_guide_status.setText(message or "Line guide: not loaded.")
 
     def set_running(self, running: bool) -> None:
         self.start_btn.setEnabled(not running)

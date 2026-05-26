@@ -1,0 +1,22 @@
+# Notices
+
+This repository is based on:
+
+- ForzaDesigner6
+- https://github.com/tokyubevoxelverse/ForzaDesigner6
+- License: MIT
+- Copyright (c) 2026 Forza Designer 6 contributors
+
+The MIT license text for the project is provided in `LICENSE`. Modifications in
+this repository are distributed under the same MIT license unless a file states
+another license.
+
+Source and binary distributions should include these files:
+
+- `LICENSE`
+- `NOTICE`
+- `THIRD_PARTY_NOTICES.md`
+
+Bundled media, fonts, optional model files, and third-party runtime packages may
+have separate license or attribution requirements. Review
+`THIRD_PARTY_NOTICES.md` before publishing a public release.

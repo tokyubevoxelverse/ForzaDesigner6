@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "fd6"
 version = "0.1.0"
-description = "Forza Designer 6 — image to vinyl-group shapes for Forza Horizon 6"
+description = "Forza Designer 6 - image to vinyl-group shapes for Forza Horizon 3, 4, 5, and 6"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
@@ -15,11 +15,21 @@ dependencies = [
     "Pillow>=10.0.0",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0", "pyinstaller>=6.5.0"]
+line-guide = ["onnxruntime"]
+line-guide-gpu = ["onnxruntime-gpu"]
+line-guide-directml = ["onnxruntime-directml"]
+
 [project.scripts]
 fd6 = "fd6.app:main"
 
 [tool.setuptools.packages.find]
 include = ["fd6*"]
+
+[tool.setuptools.package-data]
+"fd6.settings" = ["profiles/*.ini"]
+"fd6.inject" = ["patterns/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

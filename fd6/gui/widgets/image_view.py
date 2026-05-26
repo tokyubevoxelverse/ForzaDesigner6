@@ -6,28 +6,37 @@ from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QLabel, QSizePolicy
 
 
+def _pick_transform_mode(
+    pix_width: int,
+    pix_height: int,
+    box_width: int,
+    box_height: int,
+    prefer_crisp_upscale: bool,
+):
+    if not prefer_crisp_upscale or pix_width <= 0 or pix_height <= 0 or box_width <= 0 or box_height <= 0:
+        return Qt.SmoothTransformation
+    scale = min(box_width / pix_width, box_height / pix_height)
+    if scale > 1.0:
+        return Qt.FastTransformation
+    return Qt.SmoothTransformation
+
+
 class ImageView(QLabel):
     """QLabel that scales its pixmap on resize while preserving aspect ratio."""
 
-    def __init__(self, placeholder: str = "—", parent=None) -> None:
+    def __init__(self, placeholder: str = "-", parent=None, prefer_crisp_upscale: bool = False) -> None:
         super().__init__(placeholder, parent)
         self.setAlignment(Qt.AlignCenter)
         self.setMinimumSize(160, 120)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setStyleSheet("QLabel { background: #181818; color: #555; border: 1px solid #2a2a2a; }")
         self._pix: QPixmap | None = None
+        self._prefer_crisp_upscale = prefer_crisp_upscale
 
     def set_numpy(self, arr: np.ndarray) -> None:
-        """Display an HxWx3 (RGB) or HxWx4 (RGBA) numpy array.
-
-        Sticker-mode preview emits RGBA so the canvas's transparent regions
-        render as the pane background instead of a solid grey rectangle —
-        matching how the Source view displays the same PNG.
-        """
         if arr.ndim != 3 or arr.shape[2] not in (3, 4):
             return
         h, w, c = arr.shape
-        # QImage expects bytes contiguous; force a copy when not already.
         if not arr.flags["C_CONTIGUOUS"]:
             arr = np.ascontiguousarray(arr)
         if c == 4:
@@ -45,12 +54,19 @@ class ImageView(QLabel):
 
     def clear_image(self) -> None:
         self._pix = None
-        self.setText("—")
+        self.setText("-")
 
     def _rescale(self) -> None:
         if self._pix is None:
             return
-        scaled = self._pix.scaled(self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        transform_mode = _pick_transform_mode(
+            self._pix.width(),
+            self._pix.height(),
+            self.width(),
+            self.height(),
+            self._prefer_crisp_upscale,
+        )
+        scaled = self._pix.scaled(self.size(), Qt.KeepAspectRatio, transform_mode)
         self.setPixmap(scaled)
 
     def resizeEvent(self, event) -> None:

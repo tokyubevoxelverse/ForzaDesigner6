@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import random
 
 import numpy as np
@@ -29,23 +29,21 @@ class Triangle(Shape):
         x0, y0, x1, y1 = bbox
         if x1 <= x0 or y1 <= y0:
             return np.zeros((0, 0), dtype=np.uint8), bbox
-        ys = np.arange(y0, y1, dtype=np.float32)
-        xs = np.arange(x0, x1, dtype=np.float32)
-        xg, yg = np.meshgrid(xs, ys)
+        ys = np.arange(y0, y1, dtype=np.float32)[:, None]
+        xs = np.arange(x0, x1, dtype=np.float32)[None, :]
         # Barycentric sign-of-edge test
         def edge(ax, ay, bx, by, px, py):
             return (bx - ax) * (py - ay) - (by - ay) * (px - ax)
-        d1 = edge(self.x1, self.y1, self.x2, self.y2, xg, yg)
-        d2 = edge(self.x2, self.y2, self.x3, self.y3, xg, yg)
-        d3 = edge(self.x3, self.y3, self.x1, self.y1, xg, yg)
+        d1 = edge(self.x1, self.y1, self.x2, self.y2, xs, ys)
+        d2 = edge(self.x2, self.y2, self.x3, self.y3, xs, ys)
+        d3 = edge(self.x3, self.y3, self.x1, self.y1, xs, ys)
         has_neg = (d1 < 0) | (d2 < 0) | (d3 < 0)
         has_pos = (d1 > 0) | (d2 > 0) | (d3 > 0)
         mask = ~(has_neg & has_pos)
         return (mask.astype(np.uint8) * 255), bbox
 
     def mutate(self, rng: random.Random, w: int, h: int) -> "Triangle":
-        from copy import copy as shallow_copy
-        new = shallow_copy(self)
+        new = self._copy_for_mutation()
         vertex = rng.randint(0, 2)
         dx, dy = rng.gauss(0, 16), rng.gauss(0, 16)
         if vertex == 0:

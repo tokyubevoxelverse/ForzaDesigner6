@@ -1,0 +1,64 @@
+{
+  "parameters": {
+    "seed": 8,
+    "stop_at": 16,
+    "random_samples": 32,
+    "mutated_samples": 8,
+    "compute_backend": "cpu",
+    "target_size": [
+      40,
+      40
+    ],
+    "guide_source": "synthetic",
+    "command": "tools\\line_guide_benchmark.py --output docs\\line_guide_measurements.json --backend cpu"
+  },
+  "environment": {
+    "torch": "2.10.0+cu130",
+    "onnxruntime": "1.24.4",
+    "onnxruntime_providers": [
+      "DmlExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "cuda_device": "NVIDIA GeForce RTX 5090"
+  },
+  "guide": {
+    "source": "synthetic",
+    "prepare_seconds": 0.0,
+    "prepare_vram_peak_mb": null
+  },
+  "baseline": {
+    "elapsed_seconds": 0.13130169999203645,
+    "rms": 55.87358872192359,
+    "edge_f1": 0.5610041099202192,
+    "edge_precision_t1": 0.5497512437810945,
+    "edge_recall_t1": 0.5727272727272728,
+    "edge_f1_t1": 0.5610041099202192,
+    "gradient_error": 50.6396550441557,
+    "ssim": 0.5781518924297302,
+    "shape_count": 16,
+    "vram_peak_mb": 0.0
+  },
+  "line_guide": {
+    "elapsed_seconds": 0.12314219999825582,
+    "rms": 53.41214554449827,
+    "edge_f1": 0.788300935925126,
+    "edge_precision_t1": 0.7625,
+    "edge_recall_t1": 0.8159090909090909,
+    "edge_f1_t1": 0.788300935925126,
+    "gradient_error": 43.44518776402706,
+    "ssim": 0.6271093664805073,
+    "shape_count": 16,
+    "vram_peak_mb": 0.0
+  },
+  "delta": {
+    "elapsed_seconds": -0.008159499993780628,
+    "elapsed_ratio": 0.9378568594749687,
+    "rms": -2.4614431774253163,
+    "edge_f1": 0.22729682600490675,
+    "edge_precision_t1": 0.21274875621890543,
+    "edge_recall_t1": 0.24318181818181817,
+    "edge_f1_t1": 0.22729682600490675,
+    "gradient_error": -7.194467280128642,
+    "ssim": 0.048957474050777106
+  }
+}

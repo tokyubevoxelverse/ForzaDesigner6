@@ -15,13 +15,12 @@ from fd6.gui.queue_panel import QueuePanel
 from fd6.gui.settings_panel import SettingsPanel
 from fd6.gui.upload_panel import UploadPanel
 from fd6.shapegen.profile import Profile
-from fd6.shapegen.worker import GenerationWorker
-from fd6.inject.fh6_injector import patterns_are_populated, FH6_TARGET_BUILD
 
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
+        from fd6.inject.fh6_injector import FH6_TARGET_BUILD
         self.setWindowTitle(f"Forza Designer 6 — for Forza Horizon 6 build {FH6_TARGET_BUILD}")
         self.resize(1280, 760)
         self.setStatusBar(QStatusBar(self))
@@ -111,9 +110,7 @@ class MainWindow(QMainWindow):
             self._sync_particle_count_check(self.particles.count())
 
         # Background music: 3 looping OpenSource tracks. Construct now (cheap),
-        # but DEFER starting until start_music() is called from app.py after the
-        # splash finishes. Two simultaneous QMediaPlayer instances racing during
-        # splash teardown was causing GUI crashes on skip / video end.
+        # then start after the main window has been shown.
         from fd6.gui.music import MusicPlayer
         self.music = MusicPlayer(self)
         self.music.state_changed.connect(self._on_music_state)
@@ -129,8 +126,7 @@ class MainWindow(QMainWindow):
                 act.setEnabled(False)
 
     def start_music(self) -> None:
-        """Begin background music. Call once, after the splash has finished, to
-        avoid two QMediaPlayer audio streams colliding during splash teardown."""
+        """Begin background music after the main window has been shown."""
         if not getattr(self, "music", None) or not self.music.has_tracks():
             return
         if getattr(self, "_music_started", False):
@@ -360,6 +356,7 @@ class MainWindow(QMainWindow):
                 break
 
     def _show_about(self) -> None:
+        from fd6.inject.fh6_injector import FH6_TARGET_BUILD
         QMessageBox.about(
             self,
             "About Forza Designer 6",
@@ -375,6 +372,7 @@ class MainWindow(QMainWindow):
         )
 
     def _refresh_inject_button(self) -> None:
+        from fd6.inject.fh6_injector import patterns_are_populated
         ready = patterns_are_populated()
         self.settings_panel.inject_btn.setEnabled(ready)
         tip = (
@@ -385,12 +383,14 @@ class MainWindow(QMainWindow):
         self.settings_panel.inject_btn.setToolTip(tip)
 
     def _on_files_selected(self, paths: list[Path]) -> None:
+        queued_any = False
         for p in paths:
-            self.queue.add(p)
-        if self._worker is None:
+            queued_any = self.queue.add(p) or queued_any
+        if queued_any and self._worker is None:
             self._start_next()
 
     def _start_next(self) -> None:
+        from fd6.shapegen.worker import GenerationWorker
         if self._worker is not None:
             return  # already running
         next_path = self.queue.pop_next_queued()
@@ -411,6 +411,9 @@ class MainWindow(QMainWindow):
         self._thread = QThread(self)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
+        self._worker.backend_ready.connect(lambda label: self.statusBar().showMessage(f"Compute: {label}", 8000))
+        self._worker.line_guide_ready.connect(self.settings_panel.set_line_guide_status)
+        self._worker.line_guide_ready.connect(lambda message: self.statusBar().showMessage(message, 8000))
         self._worker.progress.connect(self.preview.on_progress)
         self._worker.preview.connect(self.preview.on_preview)
         self._worker.checkpoint_written.connect(lambda p: self.statusBar().showMessage(f"Checkpoint: {p}", 4000))

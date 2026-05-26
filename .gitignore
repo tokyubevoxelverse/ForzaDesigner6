@@ -1,7 +1,12 @@
 # PyInstaller / build artifacts
-build/
-dist/
+build*/
+dist*/
 *.spec
+!FD64FH6354221.spec
+!FD64FH6354221_onnx.spec
+!FD64FH6354221_onedir.spec
+*.log
+*.tmp
 
 # Python
 __pycache__/
@@ -34,6 +39,11 @@ desktop.ini
 *.png.json
 *_test_output.json
 
+# Optional local line-guide model weights
+models/*.onnx
+models/*.ort
+models/*.bin
+
 # Local FH6 RE artifacts (memory dumps, scan results — huge, do not push)
 .fd6_*.pkl
 .fd6_*.json
@@ -52,3 +62,5 @@ tools/*
 !tools/SplashScreen.gif
 !tools/fd6.ico
 !tools/fd6_128.png
+!tools/create_line_guide_sobel_onnx.py
+!tools/line_guide_benchmark.py

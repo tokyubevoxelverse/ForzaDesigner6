@@ -29,8 +29,7 @@ class Rectangle(Shape):
         return np.full((y1 - y0, x1 - x0), 255, dtype=np.uint8), bbox
 
     def mutate(self, rng: random.Random, w: int, h: int) -> "Rectangle":
-        from copy import copy as shallow_copy
-        new = shallow_copy(self)
+        new = self._copy_for_mutation()
         which = rng.randint(0, 1)
         if which == 0:
             new.x = _clamp(new.x + rng.gauss(0, 16), 0, w - 1)
@@ -91,15 +90,13 @@ class RotatedRectangle(Shape):
         cos_a, sin_a = math.cos(rad), math.sin(rad)
         ys = np.arange(y0, y1, dtype=np.float32) - self.y
         xs = np.arange(x0, x1, dtype=np.float32) - self.x
-        xg, yg = np.meshgrid(xs, ys)
-        xr = cos_a * xg + sin_a * yg
-        yr = -sin_a * xg + cos_a * yg
+        xr = cos_a * xs[None, :] + sin_a * ys[:, None]
+        yr = -sin_a * xs[None, :] + cos_a * ys[:, None]
         mask = (np.abs(xr) <= self.hw) & (np.abs(yr) <= self.hh)
         return (mask.astype(np.uint8) * 255), bbox
 
     def mutate(self, rng: random.Random, w: int, h: int) -> "RotatedRectangle":
-        from copy import copy as shallow_copy
-        new = shallow_copy(self)
+        new = self._copy_for_mutation()
         which = rng.randint(0, 2)
         if which == 0:
             new.x = _clamp(new.x + rng.gauss(0, 16), 0, w - 1)

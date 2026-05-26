@@ -19,10 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-Forza Designer 6 is inspired by and credits the techniques of:
-  - forza-painter by the_adawg (MIT) — https://github.com/forza-painter/forza-painter
-  - geometrize-lib by Sam Twidale (MIT) — https://samcodes.co.uk/
-  - Primitive by Michael Fogleman (MIT) — https://github.com/fogleman/primitive

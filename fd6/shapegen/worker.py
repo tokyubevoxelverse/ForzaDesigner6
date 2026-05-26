@@ -6,9 +6,102 @@ from PIL import Image
 from PySide6.QtCore import QObject, QThread, Signal
 
 from fd6.shapegen.engine import Engine, EngineConfig
+from fd6.shapegen.line_guide import resolve_line_guide
 from fd6.shapegen.profile import Profile
 from fd6.io.exporter import save_json
 from fd6.io.json_schema import FD6Document
+
+
+def _posterize_rgb(target: np.ndarray, levels: int) -> np.ndarray:
+    if levels >= 256:
+        return target
+    bounded_levels = max(2, int(levels))
+    scale = bounded_levels - 1
+    work = target.astype(np.uint16)
+    quantized = (work * scale + 127) // 255
+    return ((quantized * 255 + (scale // 2)) // scale).astype(np.uint8)
+
+
+def _preprocess_target(target: np.ndarray, posterize_levels: int) -> np.ndarray:
+    processed = _posterize_rgb(target, posterize_levels)
+    luma = (
+        processed[:, :, 0].astype(np.int32) * 77
+        + processed[:, :, 1].astype(np.int32) * 150
+        + processed[:, :, 2].astype(np.int32) * 29
+    ) >> 8
+    padded = np.pad(luma, ((1, 1), (1, 1)), mode="edge")
+    neighborhood = (
+        padded[1:-1, 1:-1] * 4
+        + padded[:-2, 1:-1]
+        + padded[2:, 1:-1]
+        + padded[1:-1, :-2]
+        + padded[1:-1, 2:]
+    ) >> 3
+    detail = luma - neighborhood
+    boost_limit = 24 if posterize_levels < 128 else 16
+    boost_gain = 2 if posterize_levels < 64 else 1
+    boost = np.clip(detail * boost_gain, -boost_limit, boost_limit).astype(np.int16)
+    return np.clip(processed.astype(np.int16) + boost[:, :, None], 0, 255).astype(np.uint8)
+
+
+def _prepare_target_image(img: Image.Image, profile: Profile, sticker_mode: bool) -> tuple[np.ndarray, np.ndarray | None]:
+    alpha_mask: np.ndarray | None = None
+    has_alpha = img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info)
+    if has_alpha:
+        rgba = img.convert("RGBA")
+        if sticker_mode:
+            arr_rgba = np.asarray(rgba, dtype=np.uint8)
+            img = Image.fromarray(arr_rgba[:, :, :3], "RGB")
+            alpha_mask = arr_rgba[:, :, 3].copy()
+        else:
+            bg = Image.new("RGB", rgba.size, (255, 255, 255))
+            bg.paste(rgba, mask=rgba.split()[3])
+            img = bg
+    else:
+        img = img.convert("RGB")
+    if not sticker_mode and img.size[0] != img.size[1]:
+        side = max(img.size)
+        square = Image.new("RGB", (side, side), (255, 255, 255))
+        offset = ((side - img.size[0]) // 2, (side - img.size[1]) // 2)
+        square.paste(img, offset)
+        img = square
+    mr = profile.max_resolution
+    if max(img.size) > mr:
+        scale = mr / max(img.size)
+        new_size = (max(1, int(img.size[0] * scale)), max(1, int(img.size[1] * scale)))
+        img = img.resize(new_size, Image.LANCZOS)
+        if alpha_mask is not None:
+            am_img = Image.fromarray(alpha_mask, "L").resize(new_size, Image.LANCZOS)
+            alpha_mask = np.asarray(am_img, dtype=np.uint8)
+    target = np.asarray(img, dtype=np.uint8)
+    return _preprocess_target(target, profile.posterize_levels), alpha_mask
+
+
+def _prepare_line_guide_source_image(img: Image.Image, profile: Profile, sticker_mode: bool) -> Image.Image:
+    if sticker_mode:
+        work = img.convert("RGB")
+    else:
+        rgba = img.convert("RGBA") if (
+            img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info)
+        ) else None
+        if rgba is not None:
+            bg = Image.new("RGB", rgba.size, (255, 255, 255))
+            bg.paste(rgba, mask=rgba.split()[3])
+            work = bg
+        else:
+            work = img.convert("RGB")
+        if work.size[0] != work.size[1]:
+            side = max(work.size)
+            square = Image.new("RGB", (side, side), (255, 255, 255))
+            offset = ((side - work.size[0]) // 2, (side - work.size[1]) // 2)
+            square.paste(work, offset)
+            work = square
+    mr = profile.max_resolution
+    if max(work.size) > mr:
+        scale = mr / max(work.size)
+        new_size = (max(1, int(work.size[0] * scale)), max(1, int(work.size[1] * scale)))
+        work = work.resize(new_size, Image.LANCZOS)
+    return work
 
 
 class GenerationWorker(QObject):
@@ -16,6 +109,8 @@ class GenerationWorker(QObject):
 
     progress = Signal(int, int, float)  # shape_count, total, rms
     preview = Signal(object)            # np.ndarray (H,W,3) uint8
+    backend_ready = Signal(str)
+    line_guide_ready = Signal(str)
     finished = Signal(str)              # final json output path
     error = Signal(str)
     checkpoint_written = Signal(str)    # checkpoint json path
@@ -42,45 +137,26 @@ class GenerationWorker(QObject):
         try:
             self.output_dir.mkdir(parents=True, exist_ok=True)
             img = Image.open(self.image_path)
-            alpha_mask: np.ndarray | None = None  # None = full opacity (treat all pixels equally)
-            has_alpha = img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info)
-            if has_alpha:
-                rgba = img.convert("RGBA")
-                if self.sticker_mode:
-                    # Keep transparency: extract alpha mask, use RGB channels as target
-                    # (transparent areas keep whatever RGB they had — we ignore them via the mask)
-                    arr_rgba = np.asarray(rgba, dtype=np.uint8)
-                    img = Image.fromarray(arr_rgba[:, :, :3], "RGB")
-                    alpha_mask = arr_rgba[:, :, 3].copy()  # H x W, 0 = transparent, 255 = opaque
-                else:
-                    # Default: composite onto white to avoid leaking under-transparent RGB junk
-                    bg = Image.new("RGB", rgba.size, (255, 255, 255))
-                    bg.paste(rgba, mask=rgba.split()[3])
-                    img = bg
-            else:
-                img = img.convert("RGB")
-            # When "Add white background" mode is active (sticker_mode False), also
-            # pad non-square images to a square white canvas. This makes the FH6
-            # vinyl-group canvas (which is square) fill cleanly with white outside
-            # the original image rect, instead of leaving transparent strips.
-            if not self.sticker_mode and img.size[0] != img.size[1]:
-                side = max(img.size)
-                square = Image.new("RGB", (side, side), (255, 255, 255))
-                offset = ((side - img.size[0]) // 2, (side - img.size[1]) // 2)
-                square.paste(img, offset)
-                img = square
-            # Downscale to profile.max_resolution along the longer side.
-            mr = self.profile.max_resolution
-            if max(img.size) > mr:
-                scale = mr / max(img.size)
-                new_size = (max(1, int(img.size[0] * scale)), max(1, int(img.size[1] * scale)))
-                img = img.resize(new_size, Image.LANCZOS)
-                if alpha_mask is not None:
-                    am_img = Image.fromarray(alpha_mask, "L").resize(new_size, Image.LANCZOS)
-                    alpha_mask = np.asarray(am_img, dtype=np.uint8)
-            target = np.asarray(img, dtype=np.uint8)
+            target, alpha_mask = _prepare_target_image(img, self.profile, self.sticker_mode)
+            line_source = _prepare_line_guide_source_image(img, self.profile, self.sticker_mode)
+            line_guide = resolve_line_guide(
+                line_source,
+                (target.shape[1], target.shape[0]),
+                self.profile,
+                self.image_path,
+                guide_source_size=img.size,
+                pad_guide_to_square=not self.sticker_mode,
+            )
+            self.line_guide_ready.emit(line_guide.message)
 
-            self._engine = Engine(target, EngineConfig(profile=self.profile), alpha_mask=alpha_mask)
+            self._engine = Engine(
+                target,
+                EngineConfig(profile=self.profile),
+                alpha_mask=alpha_mask,
+                line_guide=line_guide.guide,
+                line_guide_status=line_guide.message,
+            )
+            self.backend_ready.emit(self._engine.compute_label)
             stem = self.image_path.stem
             final_path = self.output_dir / f"{stem}.json"
 

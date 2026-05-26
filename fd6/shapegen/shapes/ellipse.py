@@ -30,12 +30,13 @@ class Ellipse(Shape):
         xs = np.arange(x0, x1, dtype=np.float32) - self.x
         dx = xs / max(self.rx, 1e-6)
         dy = ys / max(self.ry, 1e-6)
-        mask = (dx[None, :] ** 2 + dy[:, None] ** 2) <= 1.0
+        dx2 = dx[None, :] * dx[None, :]
+        dy2 = dy[:, None] * dy[:, None]
+        mask = (dx2 + dy2) <= 1.0
         return (mask.astype(np.uint8) * 255), bbox
 
     def mutate(self, rng: random.Random, w: int, h: int) -> "Ellipse":
-        from copy import copy as shallow_copy
-        new = shallow_copy(self)
+        new = self._copy_for_mutation()
         which = rng.randint(0, 2)
         if which == 0:
             new.x = _clamp(new.x + rng.gauss(0, 16), 0, w - 1)
@@ -89,8 +90,12 @@ class RotatedEllipse(Shape):
     angle: float = 0.0  # degrees
 
     def bbox(self, w: int, h: int) -> tuple[int, int, int, int]:
-        r = max(self.rx, self.ry)
-        return _clip_bbox(self.x - r, self.y - r, self.x + r + 1, self.y + r + 1, w, h)
+        rad = math.radians(self.angle)
+        cos_a = abs(math.cos(rad))
+        sin_a = abs(math.sin(rad))
+        ext_x = math.sqrt((self.rx * cos_a) ** 2 + (self.ry * sin_a) ** 2)
+        ext_y = math.sqrt((self.rx * sin_a) ** 2 + (self.ry * cos_a) ** 2)
+        return _clip_bbox(self.x - ext_x, self.y - ext_y, self.x + ext_x + 1, self.y + ext_y + 1, w, h)
 
     def rasterize_mask(self, w: int, h: int) -> tuple[np.ndarray, tuple[int, int, int, int]]:
         bbox = self.bbox(w, h)
@@ -101,17 +106,15 @@ class RotatedEllipse(Shape):
         cos_a, sin_a = math.cos(rad), math.sin(rad)
         ys = np.arange(y0, y1, dtype=np.float32) - self.y
         xs = np.arange(x0, x1, dtype=np.float32) - self.x
-        xg, yg = np.meshgrid(xs, ys)
-        xr = cos_a * xg + sin_a * yg
-        yr = -sin_a * xg + cos_a * yg
+        xr = cos_a * xs[None, :] + sin_a * ys[:, None]
+        yr = -sin_a * xs[None, :] + cos_a * ys[:, None]
         dx = xr / max(self.rx, 1e-6)
         dy = yr / max(self.ry, 1e-6)
-        mask = (dx ** 2 + dy ** 2) <= 1.0
+        mask = (dx * dx + dy * dy) <= 1.0
         return (mask.astype(np.uint8) * 255), bbox
 
     def mutate(self, rng: random.Random, w: int, h: int) -> "RotatedEllipse":
-        from copy import copy as shallow_copy
-        new = shallow_copy(self)
+        new = self._copy_for_mutation()
         which = rng.randint(0, 3)
         if which == 0:
             new.x = _clamp(new.x + rng.gauss(0, 16), 0, w - 1)

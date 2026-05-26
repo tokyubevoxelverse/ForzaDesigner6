@@ -40,10 +40,16 @@ fast-path — never a replacement for the strict validator.
 from __future__ import annotations
 
 import ctypes
+import re
 import struct
 from ctypes import wintypes
 
 from fd6.inject.win_process import ProcessHandle, MEM_IMAGE
+
+
+_VTABLE_CACHE: dict[tuple[int, int, str, bytes], list[int]] = {}
+RTTI_SCAN_CHUNK_SIZE = 16 * 1024 * 1024
+RTTI_LARGE_REGION_THRESHOLD = 256 * 1024 * 1024
 
 
 def _is_user_ptr(val: int) -> bool:
@@ -63,6 +69,58 @@ def _read_u32(proc: ProcessHandle, addr: int) -> int | None:
 def _read_u64(proc: ProcessHandle, addr: int) -> int | None:
     b = proc.try_read(addr, 8)
     return struct.unpack('<Q', b)[0] if b and len(b) == 8 else None
+
+
+def _read_u32_from_region_or_process(proc: ProcessHandle, region_data: bytes,
+                                     region_base: int, addr: int) -> int | None:
+    offset = addr - region_base
+    if 0 <= offset <= len(region_data) - 4:
+        return struct.unpack_from('<I', region_data, offset)[0]
+    return _read_u32(proc, addr)
+
+
+def _read_u64_from_region_or_process(proc: ProcessHandle, region_data: bytes,
+                                     region_base: int, addr: int) -> int | None:
+    offset = addr - region_base
+    if 0 <= offset <= len(region_data) - 8:
+        return struct.unpack_from('<Q', region_data, offset)[0]
+    return _read_u64(proc, addr)
+
+
+def _iter_vtable_hit_offsets(data: bytes, patterns: list[bytes]):
+    if not patterns:
+        return
+    if len(patterns) == 1:
+        start = 0
+        pat = patterns[0]
+        while True:
+            pos = data.find(pat, start)
+            if pos < 0:
+                break
+            yield pos
+            start = pos + 8
+        return
+    combined = re.compile(b"|".join(re.escape(pat) for pat in patterns))
+    for match in combined.finditer(data):
+        yield match.start()
+
+
+def _scan_region_priority(region) -> tuple[int, int]:
+    is_large = 1 if region.size > RTTI_LARGE_REGION_THRESHOLD else 0
+    return (is_large, region.size)
+
+
+def _region_scan_units(region) -> int:
+    return max(1, (region.size + RTTI_SCAN_CHUNK_SIZE - 1) // RTTI_SCAN_CHUNK_SIZE)
+
+
+def _iter_region_chunks(proc: ProcessHandle, region):
+    offset = 0
+    while offset < region.size:
+        chunk_size = min(RTTI_SCAN_CHUNK_SIZE + 7, region.size - offset)
+        chunk_base = region.base + offset
+        yield chunk_base, proc.try_read(chunk_base, chunk_size)
+        offset += RTTI_SCAN_CHUNK_SIZE
 
 
 def _get_main_module_base(pid: int) -> int | None:
@@ -191,6 +249,21 @@ def _find_clivery_group_vtables(proc: ProcessHandle, module_base: int,
     return sorted(set(vtables))
 
 
+def _get_cached_vtables(pid: int, module_base: int, profile, status_cb=None) -> list[int] | None:
+    key = (pid, module_base, getattr(profile, "key", ""), profile.rtti_class_name)
+    cached = _VTABLE_CACHE.get(key)
+    if not cached:
+        return None
+    if status_cb:
+        status_cb(f"RTTI: reusing {len(cached)} cached CLiveryGroup vtable(s).")
+    return list(cached)
+
+
+def _remember_vtables(pid: int, module_base: int, profile, vtables: list[int]) -> None:
+    key = (pid, module_base, getattr(profile, "key", ""), profile.rtti_class_name)
+    _VTABLE_CACHE[key] = list(vtables)
+
+
 def find_livery_group_candidates(
     proc: ProcessHandle, pid: int, profile,
     layer_count: int, progress_cb=None, accept_cb=None, status_cb=None,
@@ -220,10 +293,14 @@ def find_livery_group_candidates(
         status_cb("RTTI fallback: scanning game code for CLiveryGroup class signature…")
     # Plumb progress through every MEM_IMAGE phase so the dialog doesn't
     # freeze during the multi-minute code-section scans.
-    vtables = _find_clivery_group_vtables(
-        proc, module_base, profile.rtti_class_name,
-        progress_cb=progress_cb, status_cb=status_cb,
-    )
+    vtables = _get_cached_vtables(pid, module_base, profile, status_cb=status_cb)
+    if vtables is None:
+        vtables = _find_clivery_group_vtables(
+            proc, module_base, profile.rtti_class_name,
+            progress_cb=progress_cb, status_cb=status_cb,
+        )
+        if vtables:
+            _remember_vtables(pid, module_base, profile, vtables)
     if not vtables:
         return []
     if status_cb:
@@ -240,46 +317,43 @@ def find_livery_group_candidates(
         r for r in proc.enumerate_regions()
         if r.is_private and r.readable and r.writable
     ]
-    private_regions.sort(key=lambda r: r.size, reverse=True)
+    private_regions.sort(key=_scan_region_priority)
 
     candidates: list[tuple[int, int]] = []
     seen_groups: set[int] = set()
-    total = len(private_regions)
-    for ri, region in enumerate(private_regions):
-        data = proc.try_read(region.base, region.size)
-        if data is None:
-            if progress_cb:
-                progress_cb(ri + 1, total, len(candidates))
-            continue
-        for vtable in vtables:
-            pat = struct.pack('<Q', vtable)
-            start = 0
-            while True:
-                pos = data.find(pat, start)
-                if pos < 0:
-                    break
-                start = pos + 8
-                group_addr = region.base + pos
-                if group_addr in seen_groups:
+    vtable_patterns = [struct.pack('<Q', vtable) for vtable in vtables]
+    total = sum(_region_scan_units(r) for r in private_regions) or 1
+    scanned = 0
+    for region in private_regions:
+        for chunk_base, data in _iter_region_chunks(proc, region):
+            scanned += 1
+            if data is None:
+                if progress_cb:
+                    progress_cb(scanned, total, len(candidates))
+                continue
+            for pos in _iter_vtable_hit_offsets(data, vtable_patterns):
+                group_addr = chunk_base + pos
+                if group_addr in seen_groups or group_addr & 0x7:
                     continue
-                # Read count + table pointer at the profile-defined offsets.
-                count = _read_u32(proc, group_addr + profile.livery_count_offset)
+                count = _read_u32_from_region_or_process(
+                    proc, data, chunk_base, group_addr + profile.livery_count_offset,
+                )
                 if count is None:
                     continue
                 count_u16 = count & 0xFFFF
                 if count_u16 != layer_count:
                     continue
-                table_addr = _read_u64(proc, group_addr + profile.layer_table_offset)
+                table_addr = _read_u64_from_region_or_process(
+                    proc, data, chunk_base, group_addr + profile.layer_table_offset,
+                )
                 if not table_addr or not _is_user_ptr(table_addr):
                     continue
                 candidates.append((group_addr, table_addr))
                 seen_groups.add(group_addr)
-                # Early-exit hook — if the caller validates this candidate as a
-                # confident match, stop scanning the rest of memory.
                 if accept_cb is not None and accept_cb(group_addr, table_addr):
                     if progress_cb:
-                        progress_cb(ri + 1, total, len(candidates))
+                        progress_cb(scanned, total, len(candidates))
                     return [(group_addr, table_addr)]
-        if progress_cb:
-            progress_cb(ri + 1, total, len(candidates))
+            if progress_cb:
+                progress_cb(scanned, total, len(candidates))
     return candidates

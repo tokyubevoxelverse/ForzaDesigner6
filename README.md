@@ -24,10 +24,12 @@
 
 ## Install
 
-1. Download `FD6.exe` from [Releases](https://github.com/tokyubevoxelverse/ForzaDesigner6/releases).
+1. Download the `FD64FH6354221` package from [Releases](https://github.com/tokyubevoxelverse/ForzaDesigner6/releases).
 2. Double-click — no installer, no admin rights. Windows SmartScreen → "More info" → "Run anyway".
 
 Source build: Python 3.10+, `pip install -r requirements.txt`. Microsoft Visual C++ Redistributable is normally already installed; if FD6 fails to launch, grab it [here](https://aka.ms/vs/17/release/vc_redist.x64.exe).
+
+GPU generation is bundled in the packaged build. For source runs, install a CUDA-enabled `torch` build from the official PyTorch instructions, then pick `Compute = GPU (CUDA)`.
 
 ---
 
@@ -35,9 +37,24 @@ Source build: Python 3.10+, `pip install -r requirements.txt`. Microsoft Visual 
 
 **Generate:**
 
-1. Launch `FD6.exe`. Click **Upload Image…** and pick a JPEG/PNG.
+1. Launch `FD64FH6354221.exe`. Click **Upload Image…** and pick a JPEG/PNG.
 2. Right panel: pick a **Profile** (`balanced` recommended) and **Stop at shapes** (1500 or 3000 typical).
-3. Click **Start**. Watch the live preview rebuild your image. The JSON auto-saves next to your source image when done.
+3. Optional: set **Compute** to `GPU (CUDA)` to run generation on the GPU.
+4. Click **Start**. Watch the live preview rebuild your image. The JSON auto-saves next to your source image when done.
+
+**Line guide (optional):**
+
+- Enable **Use line guide** to steer early candidates toward outlines.
+- Pick a guide image, or place an ONNX model at `models/line_guide.onnx` and install the optional `line-guide` or `line-guide-gpu` dependency when running from source.
+- A small reference ONNX graph can be generated with `python tools\create_line_guide_sobel_onnx.py models\line_guide.onnx`.
+- If the model needs BGR input, `-1.0` to `1.0` input, a fixed output channel, or inverted output, place `models/line_guide.json` next to it. See `models/line_guide.example.json`.
+- Normal packages do not bundle model weights or ONNX Runtime. If ONNX is unavailable or the model fails to load, FD6 continues with the existing generation path.
+- From source, install `onnxruntime` with `pip install -e ".[line-guide]"` or `onnxruntime-gpu` with `pip install -e ".[line-guide-gpu]"`.
+- On Windows, DirectML can be used with `pip install -e ".[line-guide-directml]"` when CUDA provider dependencies are unavailable.
+- Packaged builds can use the external guide image path immediately.
+- The ONNX-enabled package is built with `.\build_exe_onnx.bat`. It bundles ONNX Runtime DirectML and CPU providers, plus the generated reference model under `_internal\models\line_guide.onnx`.
+- If a copied packaged build reports `No module named 'onnxruntime'`, it is the normal package, not the ONNX-enabled package.
+- Run `python tools/line_guide_benchmark.py --output docs/line_guide_measurements.json` to record speed, VRAM, RMS, edge F1, gradient error, and SSIM for line guide on/off. Add `--model models\line_guide.onnx --output docs\line_guide_measurements_onnx.json` to measure the ONNX extraction path.
 
 **Inject:**
 
@@ -66,7 +83,6 @@ Source build: Python 3.10+, `pip install -r requirements.txt`. Microsoft Visual 
 
 | Problem | Fix |
 |---|---|
-| Splash video hangs | Click anywhere or press Esc. A hard 30 s auto-skip is always active. |
 | "No confident match" error | Vinyl editor not open, or template doesn't have enough spheres for the JSON's shape count. Load a bigger template. |
 | Re-injection scan looks stalled | RTTI fallback phase can run silently for 2–5 min on a large game. The dialog resumes once a candidate is located. |
 | Shapes offset or wrong scale | File an issue with the JSON, the source image, and a screenshot of the in-game result. |
@@ -85,8 +101,21 @@ pip install -r requirements.txt
 
 python -m fd6                # run from source
 pytest                       # run tests
-.\build_exe.bat              # → dist/FD6.exe
+.\build_exe.bat              # → dist/FD64FH6354221\
+.\build_exe_onnx.bat         # → dist/FD64FH6354221_onnx\
 ```
+
+For editable development installs:
+
+```powershell
+pip install -e ".[dev]"
+pip install -e ".[line-guide-directml]"   # optional ONNX DirectML support
+```
+
+Before publishing from this repository, run through `docs/PUBLISHING.md`.
+The upstream MIT notice is listed in `NOTICE`. Bundled media, fonts, runtime
+packages, and optional models are listed in `THIRD_PARTY_NOTICES.md` for license
+review.
 
 ---
 
@@ -111,4 +140,6 @@ The authors and contributors of Forza Designer 6 **accept no responsibility or l
 
 ## License
 
-[MIT](LICENSE) — free for any use with attribution.
+[MIT](LICENSE). This repository is based on the MIT-licensed upstream project
+listed in [NOTICE](NOTICE). Third-party and bundled-asset notes are listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

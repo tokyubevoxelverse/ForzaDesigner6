@@ -18,7 +18,7 @@ class PreviewPanel(QWidget):
 
         splitter = QSplitter(Qt.Horizontal, self)
         self.source_view = ImageView("Source", self)
-        self.preview_view = ImageView("Preview", self)
+        self.preview_view = ImageView("Preview", self, prefer_crisp_upscale=True)
         splitter.addWidget(self.source_view)
         splitter.addWidget(self.preview_view)
         splitter.setSizes([500, 500])

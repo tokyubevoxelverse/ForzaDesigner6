@@ -34,6 +34,7 @@ import json
 import struct
 from ctypes import wintypes
 from pathlib import Path
+from typing import Any
 
 from fd6.inject import Injector, VinylGroupHandle, InjectResult
 from fd6.inject.game_profiles import GameProfile, default_profile
@@ -77,6 +78,23 @@ SHAPE_ID_OTHER = 101
 # 85% gives meaningful safety against false-positives while accepting
 # templates whose 5-10% of layers are partially in a transitional state.
 SPHERE_FULL_TABLE_THRESHOLD = 0.85
+
+COMMON_LAYER_COUNTS = (500, 1500, 3000, 1000, 100, 50, 20, 10)
+SCAN_CHUNK_SIZE = 16 * 1024 * 1024
+LARGE_REGION_THRESHOLD = 256 * 1024 * 1024
+_CAPACITY_LAYER_COUNTS = tuple(sorted(COMMON_LAYER_COUNTS))
+_LOCATED_GROUP_CACHE: dict[tuple[int, str], dict[str, Any]] = {}
+_LAYER_VALIDATE_START = min(
+    LAYER_POS_OFF, LAYER_SCALE_OFF, LAYER_COLOR_OFF, LAYER_MASK_OFF, LAYER_SHAPE_ID_OFF,
+)
+_LAYER_VALIDATE_END = max(
+    LAYER_POS_OFF + 8,
+    LAYER_SCALE_OFF + 8,
+    LAYER_COLOR_OFF + 4,
+    LAYER_MASK_OFF + 1,
+    LAYER_SHAPE_ID_OFF + 1,
+)
+_LAYER_VALIDATE_SIZE = _LAYER_VALIDATE_END - _LAYER_VALIDATE_START
 
 
 def patterns_are_populated() -> bool:
@@ -136,9 +154,107 @@ def _read_u64(proc: ProcessHandle, addr: int) -> int:
     return struct.unpack('<Q', b)[0] if b and len(b) == 8 else 0
 
 
+def _read_u16(proc: ProcessHandle, addr: int) -> int | None:
+    b = proc.try_read(addr, 2)
+    return struct.unpack('<H', b)[0] if b and len(b) == 2 else None
+
+
 def _read_2f(proc: ProcessHandle, addr: int) -> tuple[float, float] | None:
     b = proc.try_read(addr, 8)
     return struct.unpack('<2f', b) if b and len(b) == 8 else None
+
+
+def _read_layer_addrs(proc: ProcessHandle, table_addr: int, layer_count: int) -> list[int]:
+    if layer_count <= 0:
+        return []
+    table_bytes = proc.try_read(table_addr, layer_count * 8)
+    if table_bytes and len(table_bytes) == layer_count * 8:
+        return list(struct.unpack(f"<{layer_count}Q", table_bytes))
+    return [_read_u64(proc, table_addr + i * 8) for i in range(layer_count)]
+
+
+def _read_u64_from_region_or_process(
+    proc: ProcessHandle, region_data: bytes, region_base: int, addr: int,
+) -> int:
+    offset = addr - region_base
+    if 0 <= offset <= len(region_data) - 8:
+        return struct.unpack_from('<Q', region_data, offset)[0]
+    return _read_u64(proc, addr)
+
+
+def _is_heap_scan_region(region) -> bool:
+    return (
+        getattr(region, "readable", False)
+        and getattr(region, "writable", False)
+        and not getattr(region, "is_image", False)
+        and getattr(region, "is_private", True)
+    )
+
+
+def _scan_region_priority(region) -> tuple[int, int]:
+    is_large = 1 if region.size > LARGE_REGION_THRESHOLD else 0
+    return (is_large, region.size)
+
+
+def _region_scan_units(region) -> int:
+    return max(1, (region.size + SCAN_CHUNK_SIZE - 1) // SCAN_CHUNK_SIZE)
+
+
+def _iter_region_chunks(proc: ProcessHandle, region):
+    offset = 0
+    while offset < region.size:
+        chunk_size = min(SCAN_CHUNK_SIZE + 1, region.size - offset)
+        chunk_base = region.base + offset
+        yield chunk_base, proc.try_read(chunk_base, chunk_size)
+        offset += SCAN_CHUNK_SIZE
+
+
+def _read_layer_validation_bytes(proc: ProcessHandle, lptr: int) -> bytes | None:
+    if not _is_user_ptr(lptr):
+        return None
+    data = proc.try_read(lptr + _LAYER_VALIDATE_START, _LAYER_VALIDATE_SIZE)
+    if data is None or len(data) < _LAYER_VALIDATE_SIZE:
+        return None
+    return data
+
+
+def _slice_layer_field(data: bytes, offset: int, size: int) -> bytes:
+    start = offset - _LAYER_VALIDATE_START
+    return data[start:start + size]
+
+
+def _score_layer_individual_reads(proc: ProcessHandle, lptr: int) -> int:
+    if not _is_user_ptr(lptr):
+        return 0
+    score = 0
+    pos = _read_2f(proc, lptr + LAYER_POS_OFF)
+    if pos and all(_is_finite_float(v) and -8192.0 <= v <= 8192.0 for v in pos):
+        score += 1
+    scale = _read_2f(proc, lptr + LAYER_SCALE_OFF)
+    if scale and all(_is_finite_float(v) and 0.0 < abs(v) <= 64.0 for v in scale):
+        score += 1
+    color = proc.try_read(lptr + LAYER_COLOR_OFF, 4)
+    if color and len(color) == 4:
+        score += 1
+    shape = proc.try_read(lptr + LAYER_SHAPE_ID_OFF, 1)
+    if shape and shape[0] in (101, 102):
+        score += 1
+    mask = proc.try_read(lptr + LAYER_MASK_OFF, 1)
+    if mask and mask[0] in (0, 1):
+        score += 1
+    return score
+
+
+def _loose_validate_layer_individual_reads(proc: ProcessHandle, lptr: int) -> bool:
+    if not _is_user_ptr(lptr):
+        return False
+    pos = _read_2f(proc, lptr + LAYER_POS_OFF)
+    if pos is None or not all(_is_finite_float(v) for v in pos):
+        return False
+    scale = _read_2f(proc, lptr + LAYER_SCALE_OFF)
+    if scale is None or not all(_is_finite_float(v) for v in scale):
+        return False
+    return proc.try_read(lptr + LAYER_COLOR_OFF, 4) is not None
 
 
 def _score_layer(proc: ProcessHandle, lptr: int) -> int:
@@ -149,27 +265,24 @@ def _score_layer(proc: ProcessHandle, lptr: int) -> int:
     tight values (position within image canvas, scale ~32-64 / 63, rotation 0,
     color RGBA with alpha 255 or 0, shape_id == 102 for ellipse, mask == 0).
     """
-    if not _is_user_ptr(lptr):
-        return 0
+    data = _read_layer_validation_bytes(proc, lptr)
+    if data is None:
+        return _score_layer_individual_reads(proc, lptr)
     score = 0
-    # Position: must be finite floats, plausible canvas range
-    pos = _read_2f(proc, lptr + LAYER_POS_OFF)
+    pos = struct.unpack('<2f', _slice_layer_field(data, LAYER_POS_OFF, 8))
     if pos and all(_is_finite_float(v) and -8192.0 <= v <= 8192.0 for v in pos):
         score += 1
     # Scale: must be finite floats, strictly positive, plausible range
-    scale = _read_2f(proc, lptr + LAYER_SCALE_OFF)
+    scale = struct.unpack('<2f', _slice_layer_field(data, LAYER_SCALE_OFF, 8))
     if scale and all(_is_finite_float(v) and 0.0 < abs(v) <= 64.0 for v in scale):
         score += 1
     # Color: just must be readable (any 4 bytes — even all-zero is valid for unset)
-    color = proc.try_read(lptr + LAYER_COLOR_OFF, 4)
-    if color and len(color) == 4:
+    if len(_slice_layer_field(data, LAYER_COLOR_OFF, 4)) == 4:
         score += 1
-    # Shape ID: must be a known FH6 shape id
-    shape = proc.try_read(lptr + LAYER_SHAPE_ID_OFF, 1)
+    shape = _slice_layer_field(data, LAYER_SHAPE_ID_OFF, 1)
     if shape and shape[0] in (101, 102):
         score += 1
-    # Mask: must be 0 or 1
-    mask = proc.try_read(lptr + LAYER_MASK_OFF, 1)
+    mask = _slice_layer_field(data, LAYER_MASK_OFF, 1)
     if mask and mask[0] in (0, 1):
         score += 1
     return score
@@ -194,16 +307,17 @@ def _loose_validate_layer(proc: ProcessHandle, lptr: int) -> bool:
     and scale fields. This lets the Upload JSON re-injection workflow target
     groups whose layers carry our previously-written values.
     """
-    if not _is_user_ptr(lptr):
+    data = _read_layer_validation_bytes(proc, lptr)
+    if data is None:
+        return _loose_validate_layer_individual_reads(proc, lptr)
+    pos = struct.unpack('<2f', _slice_layer_field(data, LAYER_POS_OFF, 8))
+    if not all(_is_finite_float(v) for v in pos):
         return False
-    pos = _read_2f(proc, lptr + LAYER_POS_OFF)
-    if pos is None or not all(_is_finite_float(v) for v in pos):
-        return False
-    scale = _read_2f(proc, lptr + LAYER_SCALE_OFF)
-    if scale is None or not all(_is_finite_float(v) for v in scale):
+    scale = struct.unpack('<2f', _slice_layer_field(data, LAYER_SCALE_OFF, 8))
+    if not all(_is_finite_float(v) for v in scale):
         return False
     # Color bytes must exist (any byte values are fine; the game stores arbitrary RGBA)
-    if proc.try_read(lptr + LAYER_COLOR_OFF, 4) is None:
+    if len(_slice_layer_field(data, LAYER_COLOR_OFF, 4)) != 4:
         return False
     return True
 
@@ -211,11 +325,24 @@ def _loose_validate_layer(proc: ProcessHandle, lptr: int) -> bool:
 def _count_loose_valid_layers(proc: ProcessHandle, table_addr: int, layer_count: int) -> int:
     """Like _count_valid_layers but uses the loose check — for RTTI-confirmed groups."""
     valid = 0
-    for k in range(layer_count):
-        lptr = _read_u64(proc, table_addr + k * 8)
+    for lptr in _read_layer_addrs(proc, table_addr, layer_count):
         if _loose_validate_layer(proc, lptr):
             valid += 1
     return valid
+
+
+def _layer_count_tries(layer_count: int | None) -> list[int]:
+    if layer_count is None:
+        return list(COMMON_LAYER_COUNTS)
+    requested = int(layer_count)
+    if requested <= 0:
+        return list(COMMON_LAYER_COUNTS)
+    if requested in COMMON_LAYER_COUNTS:
+        return [requested] + [c for c in _CAPACITY_LAYER_COUNTS if c > requested]
+    capacity_matches = [c for c in _CAPACITY_LAYER_COUNTS if c >= requested]
+    if capacity_matches:
+        return capacity_matches + [requested]
+    return [requested]
 
 
 def locate_livery_group(
@@ -234,56 +361,54 @@ def locate_livery_group(
     so a 16/16 perfect score is the right bar.
     """
     pattern = struct.pack('<H', layer_count)
-    regions = [r for r in proc.enumerate_regions() if r.readable and r.writable and not r.is_image]
-    regions.sort(key=lambda r: r.size, reverse=True)
-    total = len(regions)
+    regions = [r for r in proc.enumerate_regions() if _is_heap_scan_region(r)]
+    regions.sort(key=_scan_region_priority)
+    total = sum(_region_scan_units(r) for r in regions) or 1
+    scanned = 0
     candidates = 0
     perfect: list[tuple[int, int]] = []  # (group_addr, table_addr) all 16/16
-    for i, r in enumerate(regions):
-        data = proc.try_read(r.base, r.size)
-        if data is None:
-            if progress_cb: progress_cb(i + 1, total, candidates)
-            continue
-        start = 0
-        while True:
-            pos = data.find(pattern, start)
-            if pos < 0:
-                break
-            start = pos + 1
-            candidates += 1
-            if candidates > max_candidates:
-                if progress_cb: progress_cb(i + 1, total, candidates)
-                return _pick_best_perfect(proc, perfect, layer_count)
-            count_addr = r.base + pos
-            group_addr = count_addr - COUNT_OFF
-            if group_addr < r.base:
+    for r in regions:
+        for chunk_base, data in _iter_region_chunks(proc, r):
+            scanned += 1
+            if data is None:
+                if progress_cb:
+                    progress_cb(scanned, total, candidates)
                 continue
-            table_addr = _read_u64(proc, group_addr + TABLE_OFF)
-            if not _is_user_ptr(table_addr):
-                continue
-            # STRICT: require ALL 16 sampled layers to score 5/5.
-            ok = True
-            sample_n = min(layer_count, 16)
-            for k in range(sample_n):
-                lptr = _read_u64(proc, table_addr + k * 8)
-                if _score_layer(proc, lptr) < 5:
-                    ok = False
+            start = 0
+            while True:
+                pos = data.find(pattern, start)
+                if pos < 0:
                     break
-            if ok:
-                # First candidate that passes the strict 16/16 gate AND the full
-                # 95% table coverage check is the winner — we return early
-                # instead of scanning the rest of memory. Saves significant time
-                # when the open template is found in the first few regions.
-                # The risk (multiple fresh templates in memory simultaneously,
-                # picking a non-active one) is unchanged from the prior behavior,
-                # which already used "first by sort order" as the tiebreaker.
-                valid_full = _count_valid_layers(proc, table_addr, layer_count)
-                if valid_full >= layer_count * SPHERE_FULL_TABLE_THRESHOLD:
+                start = pos + 1
+                candidates += 1
+                if candidates > max_candidates:
                     if progress_cb:
-                        progress_cb(i + 1, total, len(perfect) + 1)
-                    return (group_addr, table_addr)
-                perfect.append((group_addr, table_addr))
-        if progress_cb: progress_cb(i + 1, total, len(perfect))
+                        progress_cb(scanned, total, candidates)
+                    return _pick_best_perfect(proc, perfect, layer_count)
+                count_addr = chunk_base + pos
+                group_addr = count_addr - COUNT_OFF
+                if group_addr < r.base or group_addr & 0x7:
+                    continue
+                table_addr = _read_u64_from_region_or_process(
+                    proc, data, chunk_base, group_addr + TABLE_OFF,
+                )
+                if not _is_user_ptr(table_addr):
+                    continue
+                ok = True
+                sample_n = min(layer_count, 16)
+                for lptr in _read_layer_addrs(proc, table_addr, sample_n):
+                    if _score_layer(proc, lptr) < 5:
+                        ok = False
+                        break
+                if ok:
+                    valid_full = _count_valid_layers(proc, table_addr, layer_count)
+                    if valid_full >= layer_count * SPHERE_FULL_TABLE_THRESHOLD:
+                        if progress_cb:
+                            progress_cb(scanned, total, len(perfect) + 1)
+                        return (group_addr, table_addr)
+                    perfect.append((group_addr, table_addr))
+            if progress_cb:
+                progress_cb(scanned, total, len(perfect))
     return _pick_best_perfect(proc, perfect, layer_count)
 
 
@@ -320,8 +445,7 @@ def _pick_best_perfect(
 def _count_valid_layers(proc: ProcessHandle, table_addr: int, layer_count: int) -> int:
     """Walk the entire layer_table and count how many pointers resolve to 5/5 layers."""
     valid = 0
-    for k in range(layer_count):
-        lptr = _read_u64(proc, table_addr + k * 8)
+    for lptr in _read_layer_addrs(proc, table_addr, layer_count):
         if _score_layer(proc, lptr) >= 5:
             valid += 1
     return valid
@@ -376,6 +500,79 @@ class FH6Injector(Injector):
             self._proc.close()
             self._proc = None
 
+    def _cache_key(self) -> tuple[int, str] | None:
+        if self.pid is None:
+            return None
+        return (self.pid, self.profile.key)
+
+    def _build_handle(self, group_addr: int, table_addr: int, layer_count: int,
+                      layer_addrs: list[int]) -> VinylGroupHandle:
+        self._group_addr = group_addr
+        self._table_addr = table_addr
+        self._layer_count = layer_count
+        return VinylGroupHandle(
+            base_addr=group_addr,
+            layer_count=layer_count,
+            shape_array_addr=table_addr,
+            shape_stride=8,
+            meta={
+                "group_addr": group_addr,
+                "table_addr": table_addr,
+                "layer_addrs": layer_addrs,
+            },
+        )
+
+    def _remember_group(self, group_addr: int, table_addr: int, layer_count: int,
+                        layer_addrs: list[int]) -> None:
+        key = self._cache_key()
+        if key is None:
+            return
+        _LOCATED_GROUP_CACHE[key] = {
+            "group_addr": group_addr,
+            "table_addr": table_addr,
+            "layer_count": layer_count,
+            "layer_addrs": list(layer_addrs),
+        }
+
+    def _try_cached_group(self, requested_count: int | None, status_cb=None) -> VinylGroupHandle | None:
+        if self._proc is None:
+            return None
+        key = self._cache_key()
+        if key is None:
+            return None
+        cached = _LOCATED_GROUP_CACHE.get(key)
+        if not cached:
+            return None
+        try:
+            group_addr = int(cached["group_addr"])
+            table_addr = int(cached["table_addr"])
+            layer_count = int(cached["layer_count"])
+        except (KeyError, TypeError, ValueError):
+            _LOCATED_GROUP_CACHE.pop(key, None)
+            return None
+        if requested_count is not None and layer_count < requested_count:
+            return None
+        live_count = _read_u16(self._proc, group_addr + self.profile.livery_count_offset)
+        live_table = _read_u64(self._proc, group_addr + self.profile.layer_table_offset)
+        if live_count != layer_count or live_table != table_addr:
+            _LOCATED_GROUP_CACHE.pop(key, None)
+            return None
+        layer_addrs = list(cached.get("layer_addrs") or [])
+        if len(layer_addrs) != layer_count:
+            layer_addrs = _read_layer_addrs(self._proc, table_addr, layer_count)
+        sample_n = min(layer_count, 16)
+        if len(layer_addrs) < sample_n:
+            _LOCATED_GROUP_CACHE.pop(key, None)
+            return None
+        for lptr in layer_addrs[:sample_n]:
+            if not _loose_validate_layer(self._proc, lptr):
+                _LOCATED_GROUP_CACHE.pop(key, None)
+                return None
+        if status_cb:
+            status_cb(f"Reusing cached vinyl group with {layer_count} layer slots. Writing shapes now...")
+        self._remember_group(group_addr, table_addr, layer_count, layer_addrs)
+        return self._build_handle(group_addr, table_addr, layer_count, layer_addrs)
+
     def _try_rtti_locate(self, count_try: int, progress_cb=None, status_cb=None) -> tuple[int, int] | None:
         """RTTI fallback. Returns (group, table) or None on miss.
 
@@ -399,8 +596,7 @@ class FH6Injector(Injector):
             loose 16-layer sample + 95% full-table loose validation. Saves a
             multi-minute scan of the rest of memory once we have a winner."""
             sample_n = min(count_try, 16)
-            for k in range(sample_n):
-                lptr = _read_u64(proc, table_addr + k * 8)
+            for lptr in _read_layer_addrs(proc, table_addr, sample_n):
                 if not _loose_validate_layer(proc, lptr):
                     return False
             valid_full = _count_loose_valid_layers(proc, table_addr, count_try)
@@ -425,8 +621,7 @@ class FH6Injector(Injector):
         for group_addr, table_addr in candidates:
             sample_n = min(count_try, 16)
             ok = True
-            for k in range(sample_n):
-                lptr = _read_u64(proc, table_addr + k * 8)
+            for lptr in _read_layer_addrs(proc, table_addr, sample_n):
                 if not _loose_validate_layer(proc, lptr):
                     ok = False
                     break
@@ -466,67 +661,42 @@ class FH6Injector(Injector):
         """
         if not self._proc:
             raise RuntimeError("Injector not attached. Call attach() first.")
+        cached_handle = self._try_cached_group(layer_count, status_cb=status_cb)
+        if cached_handle is not None:
+            return cached_handle
         # Try the requested count first (exact match), then larger common templates
         # that could also host the JSON (a 1500-template can hold a 500-shape JSON).
-        common = [500, 1500, 3000, 1000, 100, 50, 20, 10]
-        if layer_count is not None:
-            tries = [layer_count] + [c for c in common if c > layer_count]
-        else:
-            tries = common
+        tries = _layer_count_tries(layer_count)
         for count_try in tries:
             if count_try is None:
                 continue
-            # PRIMARY: fingerprint scan (fast, proven sphere-template method).
-            result = locate_livery_group(self._proc, count_try, progress_cb=progress_cb)
+            # RTTI usually rejects far more heap noise than the u16 count scan.
+            result = self._try_rtti_locate(count_try, progress_cb=progress_cb, status_cb=status_cb)
             if result is None:
                 # Sphere fingerprint missed — the template has likely been
                 # injected on previously. Notify the GUI and try RTTI.
                 if status_cb:
                     status_cb(
-                        f"Sphere-template scan found no fresh {count_try}-layer group "
-                        f"(template may already be painted). Falling back to RTTI "
-                        f"vtable scan — this can take an extra 2–5 minutes on a "
-                        f"large game while it reads the code section. "
-                        f"DO NOT click anything in FD6 or interact with the app during "
-                        f"this phase — clicking can trigger a 'Not Responding' freeze "
-                        f"that may force-quit the injector before it finishes. The "
-                        f"scan is running in the background and will resume the dialog "
-                        f"once a candidate is located."
+                        f"RTTI scan found no {count_try}-layer group. "
+                        f"Trying sphere-template fingerprint scan."
                     )
-                result = self._try_rtti_locate(count_try, progress_cb=progress_cb, status_cb=status_cb)
+                result = locate_livery_group(self._proc, count_try, progress_cb=progress_cb)
             if result is not None:
-                self._group_addr, self._table_addr = result
-                self._layer_count = count_try
+                group_addr, table_addr = result
                 # Bulk-read the entire layer-pointer table in ONE syscall instead
                 # of count_try individual ReadProcessMemory calls. The previous
                 # per-pointer loop locked the worker thread for 1500-3000 ctypes
                 # calls back-to-back, which Windows happily labelled "Not
                 # Responding" — same outcome, but in a fraction of the time and
                 # without the visible freeze.
-                table_bytes = self._proc.try_read(self._table_addr, count_try * 8)
-                if table_bytes and len(table_bytes) == count_try * 8:
-                    addrs = list(struct.unpack(f"<{count_try}Q", table_bytes))
-                else:
-                    # Fallback: per-pointer read if the bulk read was short
-                    # (e.g. table straddles an unreadable page). Rare.
-                    addrs = [_read_u64(self._proc, self._table_addr + i * 8)
-                             for i in range(count_try)]
+                addrs = _read_layer_addrs(self._proc, table_addr, count_try)
+                self._remember_group(group_addr, table_addr, count_try, addrs)
                 if status_cb:
                     status_cb(
                         f"Located vinyl group with {count_try} layer slots. "
                         f"Writing shapes now…"
                     )
-                return VinylGroupHandle(
-                    base_addr=self._group_addr,
-                    layer_count=count_try,
-                    shape_array_addr=self._table_addr,
-                    shape_stride=8,  # pointer stride in layer table
-                    meta={
-                        "group_addr": self._group_addr,
-                        "table_addr": self._table_addr,
-                        "layer_addrs": addrs,
-                    },
-                )
+                return self._build_handle(group_addr, table_addr, count_try, addrs)
         raise RuntimeError(
             "No confident LiveryGroup match (strict 16/16 + 95% full-table validation). "
             "This is intentional — refusing to write to a low-confidence candidate would "
