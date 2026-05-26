@@ -236,6 +236,53 @@ def _downscale_to_max_resolution(rgb, alpha, max_resolution: int):
     return rgb_resized, alpha
 
 
+def _install_graceful_shutdown_handler(stream, logger) -> None:
+    """Catch SIGINT (Unix) / CTRL_BREAK_EVENT (Windows) so the parent
+    EXE can request a graceful stop. Handler emits a 'cancelled' event
+    on stderr, asks torch to release the CUDA allocator + reset peak
+    stats so the next run starts clean, then exits with a non-zero
+    code. Without this handler, the only way to stop a runaway GPU
+    run is the parent calling TerminateProcess — which doesn't give
+    the runner a chance to free the cache → driver doesn't reclaim
+    VRAM → GPU stuck until PC restart.
+    """
+    import signal as _signal
+
+    def _shutdown(signum, frame):
+        emit(stream, {
+            "kind": "error", "stage": "cancelled",
+            "message": (
+                f"Runner received signal {signum} — releasing CUDA cache "
+                f"and exiting."
+            ),
+        })
+        logger.log("runner_cancelled_signal", signum=int(signum))
+        # Best-effort cache release. If torch isn't loaded yet (signal
+        # arrived during config-load), this is a no-op via ImportError.
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.reset_peak_memory_stats()
+                logger.log("runner_cuda_cache_released")
+        except Exception as exc:
+            logger.log_exception("runner_cancel_cleanup_failed", exc)
+        # Exit with code 1 (engine_run-class failure) so the parent's
+        # IPC parser routes through the error path, not the done path.
+        sys.exit(1)
+
+    # Windows: CTRL_BREAK_EVENT (SIGBREAK) is what the parent sends to
+    # CREATE_NEW_PROCESS_GROUP'd children. SIGTERM doesn't exist; if
+    # the parent eventually escalates to TerminateProcess, we can't
+    # catch that anyway (kernel-level kill).
+    # Unix: SIGINT is what the parent sends; SIGTERM is the escalation.
+    if sys.platform == "win32":
+        _signal.signal(_signal.SIGBREAK, _shutdown)
+    else:
+        _signal.signal(_signal.SIGINT, _shutdown)
+        _signal.signal(_signal.SIGTERM, _shutdown)
+
+
 def run(cfg: RunConfig, stream=sys.stderr) -> int:
     """Execute the configured run. Returns exit code."""
     # Subprocess gets its own log session file (process_label='runner')
@@ -247,6 +294,7 @@ def run(cfg: RunConfig, stream=sys.stderr) -> int:
         from forza_abyss_painter.runtime.gpu_logger import get_gpu_logger
         logger = get_gpu_logger(process_label="runner")
         logger.log("runner_started", cfg_summary=cfg.summary())
+        _install_graceful_shutdown_handler(stream, logger)
     except Exception:   # pragma: no cover — defensive
         # If even gpu_logger fails to import (gpu_logger isn't in the
         # embedded site-packages copy), don't crash the runner. Fall

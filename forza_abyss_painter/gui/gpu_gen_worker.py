@@ -34,20 +34,41 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 
-# Windows-only: CREATE_NO_WINDOW (0x08000000) keeps the embedded
-# python.exe subprocess from popping up a visible cmd window. Without
-# this flag, the GPU shape-gen run shows a black/grey terminal that
-# testers close thinking it's stuck — same failure mode the install
-# step had (NTSTATUS 0xC000013A on user-cancel). Identical fix here.
+# Windows subprocess flags.
+#   CREATE_NO_WINDOW (0x08000000) — hide the cmd window of the embedded
+#       python.exe so testers don't close it thinking it's stuck.
+#   CREATE_NEW_PROCESS_GROUP (0x00000200) — give the child its own
+#       process group, which is REQUIRED to send Ctrl-Break events to
+#       the subprocess (Windows analog of SIGINT). Without this, the
+#       parent EXE can't signal the runner to stop gracefully; cancel
+#       has to use TerminateProcess (forceful) which doesn't give the
+#       runner a chance to free CUDA cache → GPU stuck → PC restart.
 _CREATE_NO_WINDOW = 0x08000000
+_CREATE_NEW_PROCESS_GROUP = 0x00000200
 
 
 def _subprocess_creationflags() -> int:
     """Windows-only flag suite for subprocess.Popen. Returns 0 on
     non-Windows since creationflags has no useful values elsewhere."""
     if sys.platform == "win32":
-        return _CREATE_NO_WINDOW
+        return _CREATE_NO_WINDOW | _CREATE_NEW_PROCESS_GROUP
     return 0
+
+
+# Cancel-ladder timeouts. The ladder is:
+#   1. send graceful-stop signal (CTRL_BREAK_EVENT on Windows, SIGINT
+#      on Unix). Runner's signal handler should empty_cache + exit.
+#   2. wait GRACE_TIMEOUT_S seconds.
+#   3. if still alive: terminate() (SIGTERM / TerminateProcess).
+#   4. wait FORCE_TIMEOUT_S more seconds.
+#   5. if STILL alive: kill() (SIGKILL on Unix; TerminateProcess on
+#      Windows — Popen.kill() is the same as terminate() on Windows
+#      but we call it anyway in case the implementation changes).
+#   6. if alive after all that, log + give up. The OS owns the zombie
+#      now and the user's only recovery is to wait for the kernel to
+#      release or restart the EXE. Should be ~impossible to reach.
+_GRACEFUL_TIMEOUT_S = 8.0    # generous — torch.cuda.empty_cache() can be slow
+_FORCE_TIMEOUT_S = 4.0
 
 
 class GpuGenWorker(QObject):
@@ -255,15 +276,88 @@ class GpuGenWorker(QObject):
     @Slot()
     def cancel(self) -> None:
         """Called from the GUI thread when the user clicks Cancel/Abort.
-        Sets the flag the reader loop checks, and SIGTERMs the subprocess
-        so it can clean up. Safe to call multiple times."""
+
+        Robust three-stage kill ladder so the run can NEVER end up with
+        an unkillable subprocess holding GPU memory (the 'had to restart
+        the PC' failure mode):
+
+          1. Send a GRACEFUL stop signal (CTRL_BREAK_EVENT on Windows,
+             SIGINT on Unix). The runner's signal handler frees the
+             CUDA cache before exiting.
+          2. Wait up to GRACEFUL_TIMEOUT_S.
+          3. If still alive: SIGTERM (subprocess.terminate). On Unix
+             this is catchable; on Windows it's TerminateProcess.
+          4. Wait up to FORCE_TIMEOUT_S.
+          5. If STILL alive: SIGKILL (subprocess.kill). Last resort.
+          6. Log and give up.
+
+        Safe to call multiple times (the ladder restart if the user
+        clicks Cancel twice, but each call still respects the same
+        timeouts).
+
+        Runs on a background thread spawned inline so the GUI doesn't
+        block while waiting for the kernel to release.
+        """
         self._cancelled = True
-        if self._proc is not None and self._proc.poll() is None:
-            try:
-                self._proc.terminate()
-            except OSError:
-                # Process already gone, race with the reader loop ending.
-                pass
+        if self._proc is None or self._proc.poll() is not None:
+            return
+        # Spin up the kill ladder on its own daemon thread so the GUI
+        # stays responsive during the up-to-12s timeout window.
+        import threading
+        threading.Thread(
+            target=self._kill_ladder, name="GpuGenWorker.kill_ladder",
+            daemon=True,
+        ).start()
+
+    def _kill_ladder(self) -> None:
+        """The actual escalation logic. Runs on a daemon thread because
+        each stage involves wait()ing on the subprocess. The reader
+        loop in run() finishes whenever the subprocess exits (or the
+        cancelled flag short-circuits the loop), so this thread's only
+        job is to ensure the subprocess actually goes away."""
+        import signal
+        proc = self._proc
+        if proc is None:
+            return
+
+        # Stage 1: graceful signal.
+        try:
+            if sys.platform == "win32":
+                # Requires CREATE_NEW_PROCESS_GROUP at spawn time.
+                proc.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                proc.send_signal(signal.SIGINT)
+        except (OSError, ValueError):
+            pass
+
+        # Wait for graceful exit.
+        try:
+            proc.wait(timeout=_GRACEFUL_TIMEOUT_S)
+            return   # exited cleanly
+        except subprocess.TimeoutExpired:
+            pass
+
+        # Stage 2: SIGTERM / TerminateProcess.
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=_FORCE_TIMEOUT_S)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+
+        # Stage 3: SIGKILL — last resort. After this, if the process
+        # is STILL alive, we're stuck in a CUDA kernel that the OS
+        # can't preempt. Log + give up. The user's recovery is to
+        # wait for the kernel to finish on its own (usually seconds)
+        # or restart the EXE (NOT the PC).
+        try:
+            proc.kill()
+            proc.wait(timeout=2.0)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
 
 def build_run_config(
