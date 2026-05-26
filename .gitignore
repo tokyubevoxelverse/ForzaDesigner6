@@ -56,6 +56,20 @@ Blue/
 # RE workshop notes — kept locally, not pushed
 memory*.md
 
+# Probe / RE scratch tooling and dumps
+probe_*.py
+probe_*.json
+live_write.py
+*_at_*.json
+fd6_injection_state.json
+post_inject.json
+pre_inject.json
+square_at_*.json
+
+# Tool task / output caches
+.claude/
+tasks/
+
 # Third-party tooling vendored locally — do not redistribute.
 # Only the three project assets below are whitelisted.
 tools/*

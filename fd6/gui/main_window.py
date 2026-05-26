@@ -2,42 +2,60 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtCore import Qt, QThread, QTimer
+from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
-    QHBoxLayout, QMainWindow, QMessageBox, QSplitter, QStatusBar, QVBoxLayout, QWidget
+    QHBoxLayout, QMainWindow, QMessageBox, QSplitter, QStackedWidget, QStatusBar, QVBoxLayout, QWidget
 )
 
+from fd6.gui.ac_settings_panel import ACSettingsPanel
 from fd6.gui.brand_banner import BrandBanner, badge_path
+from fd6.gui.game_suite_dialog import GameSuiteDialog
 from fd6.gui.preview_panel import PreviewPanel
+from fd6.gui.texture_preview_panel import TexturePreviewPanel
 from fd6.gui.themes import THEMES, apply_theme, saved_theme_name, badge_filename_for_theme
 from fd6.gui.queue_panel import QueuePanel
 from fd6.gui.settings_panel import SettingsPanel
 from fd6.gui.upload_panel import UploadPanel
 from fd6.shapegen.profile import Profile
+from fd6.suite import SuiteMode, SUITE_DISPLAY, saved_suite_mode, save_suite_mode
 
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        from fd6.inject.fh6_injector import FH6_TARGET_BUILD
-        self.setWindowTitle(f"Forza Designer 6 — for Forza Horizon 6 build {FH6_TARGET_BUILD}")
+        self.setWindowTitle("Forza Designer 6+ — Inject custom decals and vinyls into various racing titles")
         self.resize(1280, 760)
         self.setStatusBar(QStatusBar(self))
         self._apply_dark_palette()
 
-        # Panels
-        self.upload = UploadPanel(self)
-        self.preview = PreviewPanel(self)
-        self.queue = QueuePanel(self)
-        self.settings_panel = SettingsPanel(self)
+        # Suite mode — read persisted choice; default Forza on first launch.
+        # The actual popup (if any) fires after window is shown, see show() override.
+        self._suite_mode: SuiteMode = saved_suite_mode() or SuiteMode.FORZA
+        self._suite_first_launch: bool = saved_suite_mode() is None
 
-        # Layout: [upload | center (preview over queue) | settings]
+        # Panels — Forza panels existed in v0.3.0; AC panels are new for v0.3.5.
+        self.upload = UploadPanel(self)
+        self.preview = PreviewPanel(self)              # Forza preview (live shape gen)
+        self.ac_preview = TexturePreviewPanel(self)    # AC preview (cycling slots)
+        self.queue = QueuePanel(self)
+        self.settings_panel = SettingsPanel(self)      # Forza settings (geometrize knobs)
+        self.ac_settings = ACSettingsPanel(self)       # AC settings (car/slot/resolution)
+
+        # Stacked widgets so suite switch is a one-call swap.
+        self.preview_stack = QStackedWidget(self)
+        self.preview_stack.addWidget(self.preview)     # index 0 — Forza
+        self.preview_stack.addWidget(self.ac_preview)  # index 1 — AC
+        self.settings_stack = QStackedWidget(self)
+        self.settings_stack.addWidget(self.settings_panel)   # index 0 — Forza
+        self.settings_stack.addWidget(self.ac_settings)      # index 1 — AC
+
+        # Layout: [upload | center (preview-stack over queue) | settings-stack]
         center = QWidget(self)
         center_layout = QVBoxLayout(center)
         center_layout.setContentsMargins(0, 0, 0, 0)
         vsplit = QSplitter(Qt.Vertical, center)
-        vsplit.addWidget(self.preview)
+        vsplit.addWidget(self.preview_stack)
         vsplit.addWidget(self.queue)
         vsplit.setSizes([520, 220])
         center_layout.addWidget(vsplit)
@@ -45,11 +63,11 @@ class MainWindow(QMainWindow):
         hsplit = QSplitter(Qt.Horizontal, self)
         hsplit.addWidget(self.upload)
         hsplit.addWidget(center)
-        hsplit.addWidget(self.settings_panel)
+        hsplit.addWidget(self.settings_stack)
         hsplit.setSizes([240, 760, 280])
         self.setCentralWidget(hsplit)
 
-        # Wire signals
+        # Wire signals — Forza paths (unchanged)
         self.upload.files_selected.connect(self._on_files_selected)
         self.upload.json_loaded.connect(self._on_json_loaded_for_preview)
         self.upload.download_json_requested.connect(self._on_download_json)
@@ -57,6 +75,8 @@ class MainWindow(QMainWindow):
         self.settings_panel.pause_clicked.connect(self._toggle_pause)
         self.settings_panel.stop_clicked.connect(self._stop_current)
         self.settings_panel.inject_clicked.connect(self._on_inject_clicked)
+        # AC path
+        self.ac_settings.export_clicked.connect(self._on_ac_export_clicked)
 
         # Worker state
         self._worker: GenerationWorker | None = None
@@ -108,6 +128,12 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_particles_enabled_act"):
             self._particles_enabled_act.setChecked(self.particles.enabled())
             self._sync_particle_count_check(self.particles.count())
+
+        # Apply the persisted suite mode now (after menus + panels exist).
+        # The first-launch popup is deferred until showEvent fires — otherwise
+        # it appears OVER the splash screen and blocks the user from skipping it.
+        self._apply_suite_mode(self._suite_mode)
+        self._suite_popup_shown_this_session = False
 
         # Background music: 3 looping OpenSource tracks. Construct now (cheap),
         # then start after the main window has been shown.
@@ -211,9 +237,59 @@ class MainWindow(QMainWindow):
             self._font_group.addAction(a)
             fonts_menu.addAction(a)
 
+        # --- Localization submenu (v0.4.0 scaffolding — translations land later) ---
+        # English is the only working option right now; the rest are listed
+        # disabled with a "(coming soon)" suffix so the menu telegraphs the
+        # roadmap. Translation strings + Qt linguist .qm files will follow in a
+        # subsequent release.
+        loc_menu = view_menu.addMenu("&Localization")
+        self._loc_group = QActionGroup(self)
+        self._loc_group.setExclusive(True)
+        loc_options = [
+            ("English", True),
+            ("Spanish (Español)", False),
+            ("French (Français)", False),
+            ("German (Deutsch)", False),
+            ("Italian (Italiano)", False),
+            ("Portuguese (Português)", False),
+            ("Dutch (Nederlands)", False),
+            ("Polish (Polski)", False),
+            ("Russian (Русский)", False),
+            ("Japanese (日本語)", False),
+            ("Korean (한국어)", False),
+            ("Simplified Chinese (简体中文)", False),
+            ("Traditional Chinese (繁體中文)", False),
+            ("Arabic (العربية)", False),
+        ]
+        for label, enabled in loc_options:
+            act = QAction(label if enabled else f"{label} (coming soon)", self, checkable=True)
+            act.setEnabled(enabled)
+            act.setChecked(enabled)
+            self._loc_group.addAction(act)
+            loc_menu.addAction(act)
+
         # --- Customizations submenu (panel-swap toggles, persisted) ----------
         view_menu.addSeparator()
         custom_menu = view_menu.addMenu("&Customizations")
+
+        # Game-suite submenu — radio-group of FORZA / AC / NFS-coming / CREW-coming.
+        # Switches the active suite without restarting; selection persists.
+        suite_menu = custom_menu.addMenu("Change Game &Suite")
+        self._suite_action_group = QActionGroup(self)
+        self._suite_action_group.setExclusive(True)
+        self._suite_actions: dict[SuiteMode, QAction] = {}
+        for mode in (SuiteMode.FORZA, SuiteMode.AC, SuiteMode.NFS, SuiteMode.CREW):
+            meta = SUITE_DISPLAY[mode]
+            label = meta["label"] + ("" if meta["enabled"] else " (Coming Soon)")
+            act = QAction(label, self, checkable=True)
+            act.setEnabled(bool(meta["enabled"]))
+            act.setChecked(mode == self._suite_mode)
+            act.triggered.connect(lambda checked=False, m=mode: self._on_suite_menu_selected(m))
+            self._suite_action_group.addAction(act)
+            suite_menu.addAction(act)
+            self._suite_actions[mode] = act
+        custom_menu.addSeparator()
+
         self._swap_recents_act = QAction("&Swap recents with image searcher", self, checkable=True)
         self._swap_recents_act.setStatusTip(
             "Replace the Recent files list with a Google-style image search panel "
@@ -295,6 +371,121 @@ class MainWindow(QMainWindow):
         s.setValue("swap_recents_with_image_searcher", checked)
         s.endGroup()
 
+    # -------- suite-mode dispatch --------
+    def _apply_suite_mode(self, mode: SuiteMode) -> None:
+        """Swap the visible settings/preview panels + tweak the upload panel for the new suite."""
+        self._suite_mode = mode
+        is_ac = (mode == SuiteMode.AC)
+        # Stack swap
+        self.preview_stack.setCurrentIndex(1 if is_ac else 0)
+        self.settings_stack.setCurrentIndex(1 if is_ac else 0)
+        # Hide Forza-only JSON buttons in AC mode (AC has no JSON pipeline).
+        if hasattr(self.upload, "upload_json_btn"):
+            self.upload.upload_json_btn.setVisible(not is_ac)
+        if hasattr(self.upload, "download_json_btn"):
+            self.upload.download_json_btn.setVisible(not is_ac)
+        # Sync the radio group in the menu (in case suite changed via popup, not menu)
+        if hasattr(self, "_suite_actions"):
+            for m, act in self._suite_actions.items():
+                act.setChecked(m == mode)
+        # Status bar feedback
+        meta = SUITE_DISPLAY[mode]
+        self.statusBar().showMessage(f"Game suite: {meta['label']}", 4000)
+
+    def _on_suite_menu_selected(self, mode: SuiteMode) -> None:
+        """Customizations → Change Game Suite → <mode>."""
+        meta = SUITE_DISPLAY[mode]
+        if not meta["enabled"]:
+            return
+        if mode == self._suite_mode:
+            return
+        self._apply_suite_mode(mode)
+        save_suite_mode(mode)
+
+    def _prompt_suite_on_first_launch(self) -> None:
+        """Show the 4-tile suite picker if the user has never picked one.
+
+        Called shortly after the window is shown so the splash teardown
+        completes first. If a saved mode exists we skip the popup entirely.
+        """
+        if not self._suite_first_launch:
+            return
+        dlg = GameSuiteDialog(self, current=None)
+        result = dlg.exec()
+        if result and dlg.selected is not None:
+            self._apply_suite_mode(dlg.selected)
+            save_suite_mode(dlg.selected)
+        else:
+            # User dismissed without picking — default to Forza and save so we
+            # don't keep popping the dialog.
+            self._apply_suite_mode(SuiteMode.FORZA)
+            save_suite_mode(SuiteMode.FORZA)
+        self._suite_first_launch = False
+
+    # -------- AC export handler --------
+    def _on_ac_export_clicked(self, cfg: dict) -> None:
+        """User clicked Export to ACC. cfg comes from ACSettingsPanel._gather_export_config."""
+        from fd6.ac.livery_writer import write_acc_livery
+        from fd6.ac.slot_planner import plan_slots
+        from fd6.ac.texture_pipeline import build_decal_texture
+
+        # We need a source image — use whatever file was last uploaded.
+        if not getattr(self, "_current_path", None):
+            QMessageBox.information(
+                self, "No image",
+                "Upload an image first via 'Upload Image…' before exporting an ACC livery.",
+            )
+            return
+        if not cfg.get("car_model"):
+            QMessageBox.information(
+                self, "Pick a car",
+                "Select an ACC car model from the dropdown before exporting.",
+            )
+            return
+        try:
+            rgba, applied_aspect = build_decal_texture(
+                self._current_path,
+                target_long_edge=int(cfg["resolution"]),
+                aspect_choice=str(cfg["aspect"]),
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Texture build failed", f"{type(exc).__name__}: {exc}")
+            return
+
+        slot_filenames = plan_slots(
+            auto=bool(cfg["auto_slot"]),
+            manual_main=cfg.get("manual_main_slots"),
+            manual_sponsors=cfg.get("manual_sponsor_slots"),
+        )
+
+        # Refresh the cycling preview so the user can verify before exporting again.
+        self.ac_preview.set_slots([(s, rgba) for s in slot_filenames])
+
+        # Write to disk
+        result = write_acc_livery(
+            profile=cfg["profile"],
+            car_model=cfg["car_model"],
+            team_name=cfg["team_name"] or f"FD6_{Path(self._current_path).stem}",
+            rgba=rgba,
+            slot_filenames=slot_filenames,
+            display_name=cfg["display_name"],
+            race_number=int(cfg["race_number"]),
+            paint=cfg.get("paint"),
+        )
+        if result.success:
+            # Progress bar to 100% so the bottom strip stops sitting at 0% after
+            # a finished export — the export IS complete, the bar should reflect that.
+            self.ac_preview.progress.setValue(100)
+            self.ac_preview.status_label.setText(result.message)
+            self.statusBar().showMessage(result.message, 8000)
+            QMessageBox.information(
+                self, "Livery exported",
+                f"{result.message}\n\nFolder:\n{result.team_folder}",
+            )
+        else:
+            self.ac_preview.progress.setValue(0)
+            QMessageBox.critical(self, "Export failed", result.message)
+
     # -------- font handler --------
     def _on_font_pick(self, display_name: str) -> None:
         from PySide6.QtWidgets import QApplication
@@ -359,11 +550,20 @@ class MainWindow(QMainWindow):
         from fd6.inject.fh6_injector import FH6_TARGET_BUILD
         QMessageBox.about(
             self,
-            "About Forza Designer 6",
-            f"<b>Forza Designer 6</b><br>v0.1.0<br>"
-            f"<i>For Forza Horizon 6 build number {FH6_TARGET_BUILD}</i><br><br>"
-            "Image → vinyl-group shapes for Forza Horizon 6, with live memory "
-            "injection of position, scale, rotation, and color.<br><br>"
+            "About Forza Designer 6+",
+            f"<b>Forza Designer 6+</b><br>v0.4.0<br>"
+            f"<i>For Forza Horizon 3 / 4 / 5 / 6 (FH6 build {FH6_TARGET_BUILD}) "
+            f"and Assetto Corsa Competizione</i><br><br>"
+            "Multi-game livery suite. Forza titles: live memory injection of "
+            "vinyl-group shapes (position, scale, rotation, color). Assetto "
+            "Corsa Competizione: file-based PNG livery export to the user's "
+            "Documents folder.<br><br>"
+            "v0.4.0 highlights: Assetto Corsa Competizione livery export, "
+            "multi-game suite picker, expanded Forza target list "
+            "(FH3 / FH4 / FH5 / FH6), 2 GiB memory-region read fix, "
+            "transparent edge-buffer padding on all generations, JBA Online "
+            "GameBoy Emulator banner CTA, and a per-type diagnostic line in "
+            "the injection result dialog.<br><br>"
             "Inspired by forza-painter (the_adawg), built on the techniques of "
             "geometrize-lib (Sam Twidale) and Primitive (Michael Fogleman). "
             "LiveryGroup discovery approach adapted from bvzrays/forza-painter-fh6.<br><br>"
@@ -383,11 +583,64 @@ class MainWindow(QMainWindow):
         self.settings_panel.inject_btn.setToolTip(tip)
 
     def _on_files_selected(self, paths: list[Path]) -> None:
+        if getattr(self, "_suite_mode", SuiteMode.FORZA) == SuiteMode.AC:
+            # AC mode: no queue, no auto-start. Track the most-recently
+            # uploaded file as the source for the next Export click, show it
+            # in the source pane, AND build the slot previews immediately so
+            # the user can see what'll be written before clicking Export.
+            if paths:
+                self._current_path = Path(paths[-1])
+                self.ac_preview.set_source(self._current_path)
+                self._refresh_ac_preview()
+                self.statusBar().showMessage(
+                    f"Loaded {self._current_path.name}. "
+                    "Adjust settings then click Export to write the livery.",
+                    6000,
+                )
+            return
+        # Forza path — unchanged from v0.3.0 behavior.
         queued_any = False
         for p in paths:
             queued_any = self.queue.add(p) or queued_any
         if queued_any and self._worker is None:
             self._start_next()
+
+    def _refresh_ac_preview(self) -> None:
+        """Rebuild the AC cycling-slot preview from the current source image
+        and the settings-panel state. Called on upload and (in future) on
+        settings changes. Cheap enough at default resolutions to run inline.
+        """
+        if not getattr(self, "_current_path", None):
+            return
+        try:
+            from fd6.ac.slot_planner import plan_slots
+            from fd6.ac.texture_pipeline import build_decal_texture
+            cfg = self.ac_settings._gather_export_config()
+            rgba, applied_aspect = build_decal_texture(
+                self._current_path,
+                target_long_edge=int(cfg["resolution"]),
+                aspect_choice=str(cfg["aspect"]),
+            )
+            slot_filenames = plan_slots(
+                auto=bool(cfg["auto_slot"]),
+                manual_main=cfg.get("manual_main_slots"),
+                manual_sponsors=cfg.get("manual_sponsor_slots"),
+            )
+            self.ac_preview.set_slots([(s, rgba) for s in slot_filenames])
+            # Surface "preview is ready" so users don't think the pane is empty.
+            h, w, _ = rgba.shape
+            self.ac_preview.status_label.setText(
+                f"Preview ready — {w}×{h}  •  aspect {applied_aspect}  •  "
+                f"{len(slot_filenames)} slot(s) ready to write. "
+                f"Click Export when satisfied."
+            )
+            self.ac_preview.progress.setValue(100)
+        except Exception as exc:
+            # Preview is best-effort; never block on a failure here.
+            self.ac_preview.status_label.setText(
+                f"Preview build failed: {type(exc).__name__}: {exc}"
+            )
+            self.ac_preview.progress.setValue(0)
 
     def _start_next(self) -> None:
         from fd6.shapegen.worker import GenerationWorker
@@ -684,6 +937,25 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         if hasattr(self, "brand_banner") and self.brand_banner is not None:
             self.brand_banner.reposition()
+
+    def showEvent(self, event) -> None:
+        """Fire the first-launch suite picker AFTER the splash hands off to us.
+
+        Constructing MainWindow happens during the splash, but show() is only
+        called once the splash teardown completes. Triggering the popup
+        before that would render it on top of the splash and prevent the user
+        from skipping the video. By waiting for showEvent we guarantee the
+        main window is the active foreground surface.
+        """
+        super().showEvent(event)
+        if (
+            self._suite_first_launch
+            and not self._suite_popup_shown_this_session
+        ):
+            self._suite_popup_shown_this_session = True
+            # One event-loop tick of delay so the window has fully painted
+            # before the modal blocks it — avoids a black-frame flash.
+            QTimer.singleShot(0, self._prompt_suite_on_first_launch)
         if hasattr(self, "particles") and self.particles is not None:
             self.particles.reposition()
             self._sync_particle_exclude_rect()

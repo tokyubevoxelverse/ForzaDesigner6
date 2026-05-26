@@ -491,7 +491,14 @@ class FH6Injector(Injector):
                     break
             if self.pid is None:
                 names = " / ".join(self.profile.process_names)
-                raise RuntimeError(f"{self.profile.label} is not running (looked for: {names})")
+                raise RuntimeError(
+                    f"{self.profile.label} is not running, OR FD6 is running with lower "
+                    f"privileges than the game. If the game IS open, close FD6 and "
+                    f"re-launch it as Administrator (right-click FD6MultiSupport.exe → "
+                    f"Run as administrator). The game's process memory is inaccessible "
+                    f"from a non-elevated FD6 even when both processes are running. "
+                    f"(Looked for: {names}.)"
+                )
         self._proc = ProcessHandle(self.pid)
         self._proc.open()
 
@@ -733,6 +740,10 @@ class FH6Injector(Injector):
         written = 0
         bytes_total = 0
         skipped = 0
+        # Per-type counter — surfaced in the final result message so users can
+        # see at a glance whether their checked rect / rotated_rect actually
+        # made it into the JSON, vs. losing every fitness contest to ellipses.
+        type_counts: dict[str, int] = {}
         for i, sd in enumerate(shape_dicts):
             lptr = layer_addrs[i]
             # SAFETY: revalidate every pointer right before writing. If a layer
@@ -757,8 +768,21 @@ class FH6Injector(Injector):
                 self._proc.write(lptr + LAYER_POS_OFF, struct.pack('<2f', x, -y))
                 bytes_total += 8
 
-                # Scale: w/divisor, h/divisor  (rx/ry for ellipse, r for circle)
-                if "rx" in sd:
+                # Scale: w/divisor, h/divisor.
+                #   ellipse / rotated_ellipse → rx, ry are half-extents (radii);
+                #     write radius/63 directly.
+                #   circle → single radius r.
+                #   rectangle / rotated_rectangle → hw, hh are HALF-extents in FD6
+                #     JSON; the game's scale field expects full-width/127, so
+                #     convert via (hw * 2) / 127. Without this conversion the
+                #     rectangle's scale reads as (1.0/127, 1.0/127) and the
+                #     in-game rect renders as a sub-pixel blob.
+                if "hw" in sd or "hh" in sd:
+                    hw = float(sd.get("hw", sd.get("hh", 0.5)))
+                    hh = float(sd.get("hh", sd.get("hw", 0.5)))
+                    sx = (hw * 2.0) / scale_div
+                    sy = (hh * 2.0) / scale_div
+                elif "rx" in sd:
                     sx = float(sd["rx"]) / scale_div
                     sy = float(sd.get("ry", sd["rx"])) / scale_div
                 elif "r" in sd:
@@ -788,6 +812,7 @@ class FH6Injector(Injector):
                 bytes_total += 1
 
                 written += 1
+                type_counts[shape_type] = type_counts.get(shape_type, 0) + 1
             except OSError:
                 # WriteProcessMemory failure for this one layer — skip and continue.
                 skipped += 1
@@ -796,6 +821,9 @@ class FH6Injector(Injector):
                 progress_cb(written, n)
 
         msg = (f"Wrote {written}/{n} shapes ({bytes_total} bytes) via LiveryGroup layer table.")
+        if type_counts:
+            mix = ", ".join(f"{t}: {c}" for t, c in sorted(type_counts.items()))
+            msg += f" Type mix written — {mix}."
         if skipped:
             msg += f" Skipped {skipped} unsafe layer(s) (failed revalidation)."
         return InjectResult(

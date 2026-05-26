@@ -145,6 +145,22 @@ class ProcessHandle:
         if not h:
             raise ctypes.WinError(ctypes.get_last_error())
         self.handle = h
+        # Pin argtypes for ReadProcessMemory / WriteProcessMemory so the size
+        # argument is treated as SIZE_T (c_size_t) instead of ctypes' default
+        # c_int. On systems where FH6 commits a single read-writable region
+        # larger than 2 GiB (some texture/shader heaps), the unpinned default
+        # overflows int32 and raises "argument 4: OverflowError: int too long
+        # to convert" the moment the scanner touches that region.
+        self._k32.ReadProcessMemory.argtypes = [
+            wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p,
+            ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+        ]
+        self._k32.ReadProcessMemory.restype = wintypes.BOOL
+        self._k32.WriteProcessMemory.argtypes = [
+            wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p,
+            ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+        ]
+        self._k32.WriteProcessMemory.restype = wintypes.BOOL
 
     def close(self) -> None:
         if self.handle:
@@ -171,13 +187,46 @@ class ProcessHandle:
             raise ctypes.WinError(ctypes.get_last_error())
         return n.value
 
+    # Per-call read cap. ReadProcessMemory itself supports SIZE_T sizes once
+    # argtypes are pinned, but allocating a multi-gigabyte ctypes buffer up
+    # front is wasteful and can OOM on 8 GB boxes. We slice the request into
+    # 256 MiB chunks and stitch the results back together — callers see a
+    # single bytes object covering the requested range.
+    _TRY_READ_CHUNK = 256 * 1024 * 1024
+
     def try_read(self, addr: int, size: int) -> bytes | None:
         """Like read() but returns None on failure (used during memory scanning where some pages disappear)."""
         if self.handle is None:
             raise RuntimeError("Process handle not open")
+        if size <= 0:
+            return b""
+        if size <= self._TRY_READ_CHUNK:
+            return self._try_read_chunk(addr, size)
+        out = bytearray()
+        remaining = size
+        cursor = addr
+        while remaining > 0:
+            take = min(remaining, self._TRY_READ_CHUNK)
+            chunk = self._try_read_chunk(cursor, take)
+            if chunk is None:
+                # Partial read up to this chunk is still usable for the caller's
+                # pattern scan; return what we have if any, else None.
+                return bytes(out) if out else None
+            out.extend(chunk)
+            if len(chunk) < take:
+                # Short read — page disappeared mid-region. Stop here.
+                break
+            cursor += take
+            remaining -= take
+        return bytes(out)
+
+    def _try_read_chunk(self, addr: int, size: int) -> bytes | None:
         buf = (ctypes.c_ubyte * size)()
         n = ctypes.c_size_t(0)
-        ok = self._k32.ReadProcessMemory(self.handle, ctypes.c_void_p(addr), buf, size, ctypes.byref(n))
+        ok = self._k32.ReadProcessMemory(
+            self.handle, ctypes.c_void_p(addr), buf,
+            ctypes.c_size_t(size), ctypes.byref(n),
+        )
         if not ok or n.value == 0:
             return None
         return bytes(buf[:n.value])

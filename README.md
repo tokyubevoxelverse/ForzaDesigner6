@@ -1,4 +1,4 @@
-# Forza Designer 6 (FD6)
+# Forza Designer 6+ (FD6)
 
 <p align="center">
   <img src="tools/SplashScreen.gif" alt="Forza Designer 6 splash" width="600"/>
@@ -10,13 +10,15 @@
   </a>
   <br/>
   <sub><a href="https://youtu.be/8LGvE7O9aeg">▶ Trailer / tutorial on YouTube</a></sub>
+  <br/>
+  <sub><a href="https://github.com/tokyubevoxelverse/ForzaDesignerRadioMaker/releases/tag/0.0.1-Alpha">🎵 Forza Designer Radio Maker — v0.0.1-Alpha release</a></sub>
 </p>
 
 <p align="center">
   <img src="Pink.png" alt="FD6 badge" width="128"/>
 </p>
 
-> Convert any image into a vinyl group for **Forza Horizon 3, 4, 5, or 6**.
+> Convert any image into a vinyl group for **Forza Horizon 3, 4, 5, or 6**, or into a livery for **Assetto Corsa Competizione**.
 
 **Repo:** https://github.com/tokyubevoxelverse/ForzaDesigner6 · **License:** MIT · **Windows 10/11 x64**
 
@@ -65,6 +67,21 @@ GPU generation is bundled in the packaged build. For source runs, install a CUDA
 5. When the status turns 🟢 green, the vinyl group has been painted with your shapes.
 
 **Re-injecting onto an already-painted template** works too — the locator falls back to an RTTI vtable scan when the fresh-sphere fingerprint misses. Expect an extra 2–5 minutes on the first re-injection scan per game session; subsequent ones are instant.
+
+---
+
+## Assetto Corsa Competizione
+
+ACC support is **file-based** — no live memory injection. FD6 writes a two-file pair (livery `.json` + skin folder with the PNG textures) directly into ACC's user-data directory, and the in-game livery picker reads it on next launch.
+
+1. Pick a target **car** from the ACC tab (FD6 ships a catalog of every base-game car). The catalog drives which texture slots are available.
+2. **Upload Image…** to load the artwork you want printed on the car. FD6 currently writes the source PNG into the upper-left of the car's 4096×4096 livery sheet. UV-aware decal placement per car model is planned for v0.3.6.
+3. Click **Export**. FD6 writes:
+    - `Documents/Assetto Corsa Competizione/Customs/Cars/<car>/<livery>.json` — the metadata ACC's picker indexes.
+    - `Documents/Assetto Corsa Competizione/Customs/Liveries/<livery>/decals.png` (plus `sponsors.png`) — the actual texture assets.
+4. Launch ACC → Car Picker → Customs tab. The new livery appears immediately.
+
+ACC export does not require ACC to be running and does not touch ACC's process memory — it's a pure file write to your Documents folder, so the ban-risk caveats that apply to Forza injection do **not** apply here.
 
 ---
 

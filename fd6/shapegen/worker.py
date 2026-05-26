@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 import numpy as np
@@ -44,6 +44,21 @@ def _preprocess_target(target: np.ndarray, posterize_levels: int) -> np.ndarray:
     return np.clip(processed.astype(np.int16) + boost[:, :, None], 0, 255).astype(np.uint8)
 
 
+def _add_edge_buffer(img: Image.Image, alpha_mask: np.ndarray | None = None) -> tuple[Image.Image, np.ndarray]:
+    pad_px = max(8, int(round(max(img.size) * 0.08)))
+    src_w, src_h = img.size
+    new_w = src_w + 2 * pad_px
+    new_h = src_h + 2 * pad_px
+    if alpha_mask is None:
+        alpha_mask = np.full((src_h, src_w), 255, dtype=np.uint8)
+    padded_alpha = np.zeros((new_h, new_w), dtype=np.uint8)
+    ah, aw = alpha_mask.shape[:2]
+    padded_alpha[pad_px:pad_px + ah, pad_px:pad_px + aw] = alpha_mask
+    buffered = Image.new("RGB", (new_w, new_h), (255, 255, 255))
+    buffered.paste(img, (pad_px, pad_px))
+    return buffered, padded_alpha
+
+
 def _prepare_target_image(img: Image.Image, profile: Profile, sticker_mode: bool) -> tuple[np.ndarray, np.ndarray | None]:
     alpha_mask: np.ndarray | None = None
     has_alpha = img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info)
@@ -65,6 +80,7 @@ def _prepare_target_image(img: Image.Image, profile: Profile, sticker_mode: bool
         offset = ((side - img.size[0]) // 2, (side - img.size[1]) // 2)
         square.paste(img, offset)
         img = square
+    img, alpha_mask = _add_edge_buffer(img, alpha_mask)
     mr = profile.max_resolution
     if max(img.size) > mr:
         scale = mr / max(img.size)
@@ -96,6 +112,7 @@ def _prepare_line_guide_source_image(img: Image.Image, profile: Profile, sticker
             offset = ((side - work.size[0]) // 2, (side - work.size[1]) // 2)
             square.paste(work, offset)
             work = square
+    work, _ = _add_edge_buffer(work)
     mr = profile.max_resolution
     if max(work.size) > mr:
         scale = mr / max(work.size)

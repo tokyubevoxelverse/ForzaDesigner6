@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import numpy as np
 
@@ -15,9 +15,21 @@ def _rasterized_mask(shape: Shape, w: int, h: int) -> tuple[np.ndarray, tuple[in
     return mask_local, bbox
 
 
-def rms_error(a: np.ndarray, b: np.ndarray, alpha_mask: np.ndarray | None = None) -> float:
+def rms_error(
+    a: np.ndarray,
+    b: np.ndarray,
+    alpha_mask: np.ndarray | None = None,
+    edge_weight: np.ndarray | None = None,
+) -> float:
     diff = a.astype(np.int32) - b.astype(np.int32)
     sq = diff * diff
+    if edge_weight is not None:
+        weight = edge_weight[:, :, None]
+        total = float((sq * weight).sum())
+        n = float(edge_weight.sum() * 3)
+        if n < 1:
+            return 0.0
+        return float(np.sqrt(total / n))
     if alpha_mask is None:
         return float(np.sqrt(sq.mean()))
     weight = (alpha_mask > 0)[:, :, None].astype(np.float32)
@@ -100,10 +112,11 @@ def composite(
     shape: Shape,
     target: np.ndarray,
     alpha_mask: np.ndarray | None = None,
+    edge_weight: np.ndarray | None = None,
 ) -> tuple[np.ndarray, float]:
-    score, color = score_shape(shape, current, target, alpha_mask)
+    score, color = score_shape(shape, current, target, alpha_mask, edge_weight=edge_weight)
     if score == float("inf"):
-        return current, rms_error(current, target, alpha_mask)
+        return current, rms_error(current, target, alpha_mask, edge_weight)
     new = current.copy()
     shape.color = color
     apply_shape_inplace(new, shape, alpha_mask)
@@ -117,7 +130,14 @@ def precompute_canvas_error(
     current: np.ndarray,
     target: np.ndarray,
     alpha_mask: np.ndarray | None = None,
+    edge_weight: np.ndarray | None = None,
 ) -> tuple[float, float]:
+    if edge_weight is not None:
+        weight_full = edge_weight[:, :, None]
+        diff = (current.astype(np.float32) - target.astype(np.float32)) ** 2
+        full_sq = float((diff * weight_full).sum())
+        n = float(edge_weight.sum() * 3)
+        return full_sq, n
     if alpha_mask is None:
         diff = current.astype(np.int32) - target.astype(np.int32)
         full_sq = float((diff * diff).sum())
@@ -144,6 +164,7 @@ def score_shape(
     gradient_full_error: float | None = None,
     gradient_norm: float | None = None,
     quality_edge_weight: np.ndarray | None = None,
+    edge_weight: np.ndarray | None = None,
     fixed_color: tuple[int, int, int, int] | None = None,
     base_rms: float | None = None,
     base_canvas_full_sq: float | None = None,
@@ -153,7 +174,7 @@ def score_shape(
     x0, y0, x1, y1 = bbox
     if x1 <= x0 or y1 <= y0 or mask_local.size == 0:
         return float("inf"), shape.color
-    if alpha_mask is None and quality_context is None:
+    if alpha_mask is None and quality_context is None and edge_weight is None:
         return _score_shape_plain_binary(
             shape,
             current,
@@ -188,6 +209,19 @@ def score_shape(
     m = (mask_local.astype(np.float32) / 255.0)[:, :, None]
     blended = m * (a * src + (1.0 - a) * region_cur) + (1.0 - m) * region_cur
     diff_in = blended - region_tgt
+    # Edge-weighted path supersedes the boolean alpha gate when present.
+    if edge_weight is not None:
+        if canvas_full_sq is None or canvas_norm is None:
+            full_sq, n = precompute_canvas_error(current, target, alpha_mask, edge_weight)
+        else:
+            full_sq, n = canvas_full_sq, canvas_norm
+        weight_region = edge_weight[y0:y1, x0:x1][:, :, None]
+        region_old_sq = float((((region_cur - region_tgt) ** 2) * weight_region).sum())
+        region_new_sq = float(((diff_in ** 2) * weight_region).sum())
+        total_sq = full_sq - region_old_sq + region_new_sq
+        if n < 1:
+            return 0.0, color
+        return float(np.sqrt(max(0.0, total_sq) / n)), color
     if alpha_mask is None:
         if base_canvas_full_sq is not None and base_rms is not None:
             total_sq = float(base_canvas_full_sq)

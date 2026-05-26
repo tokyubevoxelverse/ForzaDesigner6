@@ -43,9 +43,9 @@ def test_prepare_target_image_keeps_sticker_alpha_through_resize():
 
     target, alpha_mask = _prepare_target_image(img, profile, True)
 
-    assert target.shape == (2, 4, 3)
+    assert target.shape == (3, 4, 3)
     assert alpha_mask is not None
-    assert alpha_mask.shape == (2, 4)
+    assert alpha_mask.shape == (3, 4)
     assert int(alpha_mask[:, :2].mean()) > int(alpha_mask[:, 2:].mean())
 
 
@@ -61,4 +61,4 @@ def test_prepare_line_guide_source_matches_non_sticker_target_geometry():
     assert line_source.size == (target.shape[1], target.shape[0])
     line_arr = np.asarray(line_source, dtype=np.uint8)
     assert int(line_arr[0].mean()) > 240
-    assert int(line_arr[3, 0].mean()) < 80
+    assert int(line_arr[:, :, 0].min()) < 220

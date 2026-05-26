@@ -48,7 +48,15 @@ class Shape(ABC):
 
     @classmethod
     @abstractmethod
-    def random(cls, rng: random.Random, w: int, h: int) -> "Shape":
+    def random(cls, rng: random.Random, w: int, h: int, max_size_frac: float | None = None) -> "Shape":
+        """Create a random instance.
+
+        `max_size_frac` (0..1) caps the maximum dimension of the generated
+        shape as a fraction of the canvas — passed in by the engine on a
+        progress schedule so early shapes get large tonal coverage and later
+        shapes are pixel-scale for detail. `None` keeps each shape class's
+        legacy default (~25% canvas diameter for ellipses).
+        """
         ...
 
     def _copy_for_mutation(self) -> "Shape":
@@ -66,10 +74,16 @@ class Shape(ABC):
         return new
 
 
-def random_shape(rng: random.Random, w: int, h: int, allowed_types: list[ShapeType]) -> Shape:
+def random_shape(
+    rng: random.Random,
+    w: int,
+    h: int,
+    allowed_types: list[ShapeType],
+    max_size_frac: float | None = None,
+) -> Shape:
     type_name = rng.choice(allowed_types)
     cls = SHAPE_REGISTRY[type_name]
-    return cls.random(rng, w, h)
+    return cls.random(rng, w, h, max_size_frac=max_size_frac)
 
 
 def cached_bbox_metrics(shape: Shape, w: int, h: int) -> tuple[tuple[int, int, int, int], int, int, int]:

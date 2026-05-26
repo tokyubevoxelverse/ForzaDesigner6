@@ -76,9 +76,14 @@ class Triangle(Shape):
         )
 
     @classmethod
-    def random(cls, rng: random.Random, w: int, h: int) -> "Triangle":
+    def random(cls, rng: random.Random, w: int, h: int, max_size_frac: float | None = None) -> "Triangle":
         cx, cy = rng.uniform(0, w - 1), rng.uniform(0, h - 1)
-        spread = max(4, min(w, h) / 8)
+        if max_size_frac is None:
+            spread = max(4.0, min(w, h) / 8.0)
+        else:
+            # Gaussian spread ≈ half-diameter so the typical triangle dimension
+            # stays within max_size_frac * canvas.
+            spread = max(4.0, (min(w, h) * max_size_frac) / 2.0)
         return cls(
             color=(rng.randint(0, 255), rng.randint(0, 255), rng.randint(0, 255), 128),
             x1=_clamp(cx + rng.gauss(0, spread), 0, w - 1),

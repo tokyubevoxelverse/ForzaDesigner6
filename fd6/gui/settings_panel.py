@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 
@@ -13,11 +13,11 @@ from fd6.shapegen.profile import Profile, load_profile_from_file, list_bundled_p
 
 SHAPE_TYPE_CHOICES = [
     ("rotated_ellipse", "Rotated Ellipse (default)"),
-    ("ellipse", "Ellipse"),
-    ("circle", "Circle"),
-    ("triangle", "Triangle"),
-    ("rectangle", "Rectangle"),
-    ("rotated_rectangle", "Rotated Rectangle"),
+    ("rectangle", "Rectangle (coming soon)"),
+    ("rotated_rectangle", "Rotated Rectangle (coming soon)"),
+    ("ellipse", "Ellipse (coming soon)"),
+    ("circle", "Circle (coming soon)"),
+    ("triangle", "Triangle (coming soon)"),
 ]
 
 COMPUTE_BACKEND_CHOICES = [
@@ -43,18 +43,41 @@ class SettingsPanel(QWidget):
 
         # Profile picker
         prof_row = QHBoxLayout()
-        prof_row.addWidget(QLabel("Profile:"))
+        prof_label = QLabel("Profile:")
+        prof_label.setToolTip(
+            "A profile is a saved bundle of all the settings below. Pick one to "
+            "fill the values automatically â€” for example, '_default' uses 3000 "
+            "shapes at 1200 px which is a good general-purpose starting point. "
+            "Adjust any setting after selecting a profile and your changes stay "
+            "for this session."
+        )
+        prof_row.addWidget(prof_label)
         self.profile_combo = QComboBox(self)
+        self.profile_combo.setToolTip(prof_label.toolTip())
         self._populate_profiles()
         self.profile_combo.currentIndexChanged.connect(self._on_profile_changed)
         prof_row.addWidget(self.profile_combo, stretch=1)
         layout.addLayout(prof_row)
 
-        # Advanced group
+        # Advanced group â€” every spinbox gets a plain-language tooltip so
+        # non-technical users can hover and know what each number does.
         adv = QGroupBox("Advanced", self)
         form = QFormLayout(adv)
         self.stop_at = QSpinBox(); self.stop_at.setRange(10, 50000); self.stop_at.setValue(3000)
+        self.stop_at.setToolTip(
+            "How many shapes to generate before stopping. Set this to match the "
+            "number of layers in your open Forza vinyl group (typical sphere "
+            "templates have 500, 1500, or 3000 layers). If this number is "
+            "larger than your template's layer count, the injection will fail "
+            "because there aren't enough slots."
+        )
         self.random_samples = QSpinBox(); self.random_samples.setRange(10, 50000); self.random_samples.setValue(1000)
+        self.random_samples.setToolTip(
+            "Per shape: how many random candidate shapes the generator tries "
+            "before picking the best one. Higher = better quality but slower. "
+            "1000 is a good default; drop to 500 for a fast preview, raise to "
+            "2000+ for a final pass on a picky source image."
+        )
         self.mutated_samples = QSpinBox(); self.mutated_samples.setRange(1, 5000); self.mutated_samples.setValue(200)
         self.refine_passes = QSpinBox(); self.refine_passes.setRange(0, 10); self.refine_passes.setValue(0)
         self.max_resolution = QSpinBox(); self.max_resolution.setRange(100, 4096); self.max_resolution.setValue(1200)
@@ -78,14 +101,21 @@ class SettingsPanel(QWidget):
 
         # Sticker mode toggle
         sticker_group = QGroupBox("Image options", self)
+        sticker_group.setToolTip(
+            "How FD6 should handle source images. Affects only PNGs with "
+            "transparency â€” regular JPEG / PNG without alpha use the same "
+            "code path either way."
+        )
         sg_layout = QVBoxLayout(sticker_group)
         self.sticker_mode_cb = QCheckBox("Add white background to transparent images", sticker_group)
         self.sticker_mode_cb.setChecked(True)  # ON = current default behavior (composite onto white)
         self.sticker_mode_cb.setToolTip(
-            "ON  (default): transparent PNG areas are flattened to white before generation. "
-            "Recommended for normal images.\n"
-            "OFF (sticker mode): transparent areas stay transparent — shapes are only placed "
-            "in opaque regions. Use for stickers / logos where you want a transparent backdrop."
+            "ON (default, recommended): see-through areas of a PNG get filled with "
+            "white before generation. Use this for normal images.\n\n"
+            "OFF (sticker mode): see-through areas stay see-through and shapes "
+            "are only placed inside the visible part of the image. Use this for "
+            "logos / stickers where you want the background of the vinyl to "
+            "stay empty (the rest of the Forza vinyl group shows through)."
         )
         sg_layout.addWidget(self.sticker_mode_cb)
         layout.addWidget(sticker_group)
@@ -166,8 +196,14 @@ class SettingsPanel(QWidget):
 
         # Shape types
         types_group = QGroupBox("Shape types", self)
+        types_group.setToolTip(
+            "Which shapes the generator is allowed to use. When more than one "
+            "is checked, FD6 rotates between them so each enabled type gets "
+            "dedicated shape slots in the output."
+        )
         tg_layout = QVBoxLayout(types_group)
         self._shape_checks: dict[str, QCheckBox] = {}
+        generic_unsupported = "Not currently supported - planned for a future implementation"
         for code, label in SHAPE_TYPE_CHOICES:
             cb = QCheckBox(label, types_group)
             cb.setChecked(True)
@@ -179,8 +215,21 @@ class SettingsPanel(QWidget):
         # Action buttons
         btn_row = QHBoxLayout()
         self.start_btn = QPushButton("Start"); self.start_btn.setMinimumHeight(36)
+        self.start_btn.setToolTip(
+            "Begin shape generation on the next image in the queue using the "
+            "settings above. The preview pane shows the result building up "
+            "shape-by-shape. You can press Pause to hold and Stop to abandon."
+        )
         self.pause_btn = QPushButton("Pause"); self.pause_btn.setCheckable(True); self.pause_btn.setEnabled(False)
+        self.pause_btn.setToolTip(
+            "Temporarily pause generation. Click again to resume from where it "
+            "left off â€” no shapes are lost."
+        )
         self.stop_btn = QPushButton("Stop"); self.stop_btn.setEnabled(False)
+        self.stop_btn.setToolTip(
+            "Stop generation early. The shapes generated so far are kept and "
+            "saved to JSON â€” you can still inject the partial result."
+        )
         self.start_btn.clicked.connect(self.start_clicked.emit)
         self.pause_btn.clicked.connect(self.pause_clicked.emit)
         self.stop_btn.clicked.connect(self.stop_clicked.emit)
@@ -189,10 +238,16 @@ class SettingsPanel(QWidget):
         btn_row.addWidget(self.stop_btn)
         layout.addLayout(btn_row)
 
-        # Target game picker — FH6 is the validated default. FH5/FH4 are beta.
+        # Target game picker â€” FH6 is the validated default. FH5/FH4 are beta.
         from fd6.inject.game_profiles import list_profiles
         target_row = QHBoxLayout()
-        target_row.addWidget(QLabel("Target:"))
+        target_label = QLabel("Target:")
+        target_label.setToolTip(
+            "Which Forza title to inject into. FH6 is fully validated. "
+            "FH5 / FH4 / FH3 use the same memory layout per public research but have "
+            "not been independently verified â€” test on a throwaway vinyl group first."
+        )
+        target_row.addWidget(target_label)
         self.target_combo = QComboBox(self)
         self._target_profiles = list_profiles()
         for prof in self._target_profiles:
@@ -201,13 +256,13 @@ class SettingsPanel(QWidget):
         self.target_combo.setToolTip(
             "Which Forza title to inject into. FH6 is fully validated. "
             "FH5 / FH4 use the same memory layout per public research but have "
-            "not been independently verified — test on a throwaway vinyl group first."
+            "not been independently verified â€” test on a throwaway vinyl group first."
         )
         self.target_combo.currentIndexChanged.connect(self._on_target_changed)
         target_row.addWidget(self.target_combo, stretch=1)
         layout.addLayout(target_row)
 
-        # Inject button — label updates with target selection
+        # Inject button â€” label updates with target selection
         self.inject_btn = QPushButton("Inject into Forza Horizon 6")
         self.inject_btn.setEnabled(False)
         self.inject_btn.setToolTip(
@@ -334,7 +389,13 @@ class SettingsPanel(QWidget):
             w.blockSignals(False)
         for code, cb in self._shape_checks.items():
             cb.blockSignals(True)
-            cb.setChecked(code in prof.shape_types)
+            # Disabled shape types (everything except rotated_ellipse in v0.3.5)
+            # stay unchecked regardless of what the loaded profile prefers,
+            # so a profile that requests triangles can't sneak past the gray-out.
+            if cb.isEnabled():
+                cb.setChecked(code in prof.shape_types)
+            else:
+                cb.setChecked(False)
             cb.blockSignals(False)
         self.profile_changed.emit(self.build_profile())
 
