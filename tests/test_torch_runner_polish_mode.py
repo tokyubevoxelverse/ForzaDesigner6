@@ -92,3 +92,10 @@ def test_polish_steps_override_optional(tmp_path):
     del d["polish_steps_override"]
     cfg = RunConfig.from_dict(d)
     assert cfg.polish_steps_override is None
+
+
+def test_polish_steps_override_must_be_positive(tmp_path):
+    d = _polish_dict(tmp_path)
+    d["polish_steps_override"] = 0
+    with pytest.raises(ValueError, match="polish_steps_override"):
+        RunConfig.from_dict(d)

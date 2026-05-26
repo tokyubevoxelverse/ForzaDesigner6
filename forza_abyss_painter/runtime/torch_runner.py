@@ -20,13 +20,36 @@ actually executes. From the main EXE:
 
 ## IPC protocol (pinned by tests/test_torch_runner.py)
 
-Config file is JSON written by the EXE before spawn. Required fields:
+Config file is JSON written by the EXE before spawn.
+
+Always-required fields (both modes):
     image_path          str — absolute path to source RGB(A) image
     output_json_path    str — absolute path the runner writes final JSON to
+
+Required in fresh mode only (mode='fresh', the default):
     num_shapes          int — total shapes the engine commits
     max_resolution      int — long-side ceiling for engine downscale
     random_samples      int — seed-batch size per shape (the K in K*H*W*12)
+
     sticker_mode        bool — alpha-mask path (transparent areas skipped)
+
+Mode dispatch (#85 #86):
+    mode                str (default "fresh") — "fresh" or "polish_only".
+
+    In "fresh" mode (default): num_shapes, max_resolution, and
+    random_samples are all required. The engine generates shapes from
+    the supplied image.
+
+    In "polish_only" mode: input_shapes_path is required;
+    num_shapes/max_resolution/random_samples are NOT required and are
+    ignored (canvas dims come from the loaded JSON's image_size). The
+    engine skips generation and runs joint_polish() on the loaded
+    shapes against the supplied image.
+
+    input_shapes_path   str — (polish_only required) absolute path to
+                        an existing fd6.shapes JSON file to polish.
+    polish_steps_override  int >= 1 (optional) — overrides the default
+                        150 polish steps. Only read in polish_only mode.
 
 Optional fields with defaults that mirror GPUConfig defaults:
     seed                int (default 0 = time-based)
@@ -71,7 +94,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -171,6 +194,9 @@ class RunConfig:
                         f"polish_steps_override must be >= 1, "
                         f"got {polish_steps_override}"
                     )
+            # Placeholders — polish_only never reads these (canvas dims
+            # come from the loaded JSON's image_size). Kept as 0 (not None)
+            # so the int field types stay non-optional.
             num_shapes = 0
             max_resolution = 0
             random_samples = 0
@@ -238,6 +264,7 @@ class RunConfig:
         can show e.g., 'GPU 700 shapes @ 600px (preset: Headshot 700)'.
         Drops file paths (the EXE already knows them) + redundant defaults."""
         return {
+            "mode": self.mode,
             "num_shapes": self.num_shapes,
             "max_resolution": self.max_resolution,
             "random_samples": self.random_samples,
