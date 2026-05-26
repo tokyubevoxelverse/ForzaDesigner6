@@ -77,13 +77,12 @@ class UploadPanel(QWidget):
         layout.addWidget(self.stack, stretch=1)
 
         # Re-shape-gen + Polish (#85 #86). Both hidden until a JSON is loaded
-        # AND the corresponding feature flag is True. Construction-time flag
-        # reads are correct because flags are build-time constants.
+        # AND the corresponding feature flag is True at set_json_loaded() time.
         self._loaded_json_path: Path | None = None
         reshape_polish_row = QHBoxLayout()
         self.reshape_btn = QPushButton("Re-shape-gen at higher budget…", self)
         self.reshape_btn.setToolTip(
-            "Re-run shape-gen on the same source image at a different shape "
+            "Re-run shape-gen on the same source image at a higher shape "
             "budget. Opens the Generate dialog pre-filled with the source "
             "image from the loaded JSON."
         )
@@ -126,11 +125,11 @@ class UploadPanel(QWidget):
 
     def set_json_loaded(self, json_path: Path | None) -> None:
         """Called by MainWindow after Upload JSON succeeds (path) or fails
-        (None). Toggles the Re-shape-gen + Polish buttons accordingly,
-        respecting the feature flags. Construction-time flag values gate
-        the *maximum* visibility; the loaded-JSON state gates the *actual*
-        visibility within that maximum."""
-        self._loaded_json_path = json_path if json_path is not None else None
+        (None). Toggles the Re-shape-gen + Polish buttons accordingly. Flag
+        values are read each call so tests can monkey-patch them; in
+        production they're build-time constants and the read is effectively
+        static."""
+        self._loaded_json_path = json_path
         has_json = self._loaded_json_path is not None
         self.reshape_btn.setVisible(has_json and feature_flags.RESHAPE_GEN_AVAILABLE)
         self.polish_btn.setVisible(has_json and feature_flags.POLISH_LOADED_AVAILABLE)
