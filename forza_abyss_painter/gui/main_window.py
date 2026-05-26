@@ -24,6 +24,42 @@ from forza_abyss_painter.inject.fh6_injector import patterns_are_populated, FH6_
 from forza_abyss_painter.suite import SuiteMode, SUITE_DISPLAY, saved_suite_mode, save_suite_mode
 
 
+def _vram_preflight_verdict(
+    peak_gib: float, free_gib: float | None, budget_gib: float,
+) -> tuple[str, str]:
+    """Return (severity, recommendation) for a GPU pre-Start check.
+
+    severity:
+      - "ok"        — peak fits comfortably in free; no dialog needed.
+      - "warn"      — peak > 0.85 * free OR free < 0.9 * budget; surface
+                      a "proceed anyway?" dialog with chunked-K guidance.
+      - "block"     — peak > free; the run will OOM regardless of chunking
+                      (canvas/refill/joint_polish overhead is in the
+                      estimate but not reduced by K-chunking).
+
+    `free_gib=None` (probe unavailable, non-NVIDIA box) returns "ok" —
+    we can't make a free-vs-peak comparison so we let the existing
+    chunked-K fallback handle whatever happens at runtime.
+
+    recommendation is a one-line user-facing summary the caller can
+    paste into a dialog body.
+    """
+    if free_gib is None or free_gib <= 0:
+        return "ok", ""
+    if peak_gib > free_gib:
+        return "block", (
+            f"Estimated peak ~{peak_gib:.1f} GiB exceeds {free_gib:.1f} "
+            f"GiB free. Close other GPU apps or lower the preset."
+        )
+    if peak_gib > free_gib * 0.85 or free_gib < budget_gib * 0.9:
+        return "warn", (
+            f"Estimated peak ~{peak_gib:.1f} GiB vs {free_gib:.1f} GiB "
+            f"free (budget {budget_gib:.0f}). Chunked-K may help; may "
+            f"still OOM if free shrinks."
+        )
+    return "ok", ""
+
+
 def _resolve_source_image_path(json_path: Path, source_image_name: str) -> Path | None:
     """Resolve the source image for a loaded JSON via the same-folder
     heuristic. `source_image_name` is the JSON's `source_image` field
@@ -1048,42 +1084,59 @@ class MainWindow(QMainWindow):
         peak_gib = self.settings_panel.estimate_peak_vram_gib(profile)
         budget_gib = self.settings_panel.selected_vram_budget_gib()
 
-        # Pre-launch nvidia-smi free-VRAM probe (#125). The user-set
-        # budget is what THEY think is safe; nvidia-smi tells us what's
-        # ACTUALLY free right now. If FH6 / Chrome / another tool is
-        # squatting on VRAM, the budget is lying and the run will OOM
-        # despite our chunked-K math. Surface the mismatch as a modal
-        # BEFORE we go into the chunking decision below.
+        # Pre-launch nvidia-smi free-VRAM probe (#125). Cursor's Run 4
+        # showed chunked-K reduces K-batch peak but not the total process
+        # footprint (canvas + refill + joint_polish). The 15× safety
+        # multiplier in vram_planner is calibrated against that — if
+        # peak > free, the run WILL OOM regardless of chunking.
         from forza_abyss_painter.runtime.nvidia_smi import probe_free_vram
         probe = probe_free_vram(force=True)
-        if probe.available and probe.free_gib is not None:
-            free_gib = probe.free_gib
-            # Only warn if the effective free is meaningfully below the
-            # budget AND the run would actually need most of that. A
-            # tiny preset on a busy card doesn't need this dialog.
-            if (free_gib < budget_gib * 0.9
-                    and peak_gib > free_gib * 0.85):
-                answer = QMessageBox.question(
-                    self, "Less free VRAM than your budget says",
-                    f"<b>nvidia-smi reports {free_gib:.1f} GiB free</b> "
-                    f"on {probe.name or 'the GPU'}, but your VRAM "
-                    f"budget is set to <b>{budget_gib} GiB</b>.<br><br>"
-                    f"This preset estimates a peak of "
-                    f"<b>~{peak_gib:.1f} GiB</b>, which won't fit in "
-                    f"the actual free VRAM. Likely cause: another "
-                    f"process (FH6, browser, another GPU job) is "
-                    f"holding memory.<br><br>"
-                    f"<b>Recommended:</b> close other GPU apps and "
-                    f"re-Start. Or proceed anyway and let the engine "
-                    f"chunk against the smaller real free pool — "
-                    f"slower, may still OOM if free shrinks further.<br><br>"
-                    f"Proceed anyway?",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.No,   # default No — let user fix it
-                )
-                if answer != QMessageBox.Yes:
-                    self.queue.set_status(image_path, "queued")
-                    return
+        free_gib = probe.free_gib if probe.available else None
+        severity, summary = _vram_preflight_verdict(peak_gib, free_gib, budget_gib)
+
+        if severity == "block":
+            QMessageBox.critical(
+                self,
+                "Won't fit in free VRAM — cannot start",
+                f"<b>{summary}</b><br><br>"
+                f"This preset estimates a peak of "
+                f"<b>~{peak_gib:.1f} GiB</b> but only "
+                f"<b>{free_gib:.1f} GiB</b> is currently free on "
+                f"{probe.name or 'the GPU'}.<br><br>"
+                f"<b>Chunked-K can't save this run</b> — the estimate "
+                f"already includes non-K overhead (canvas, refill, "
+                f"joint_polish). Run 4 evidence: 47.5 GiB allocated on "
+                f"a 32 GiB GPU even with chunking active.<br><br>"
+                f"<b>Fixes (in order of effort):</b><br>"
+                f"  • Close FH6, Chrome, Discord, other GPU apps<br>"
+                f"  • Lower <b>Random samples</b> (e.g. 8192 → 4096)<br>"
+                f"  • Lower <b>Max resolution</b> (e.g. 720 → 600)<br>"
+                f"  • Pick a smaller preset",
+                QMessageBox.Ok,
+            )
+            self.queue.set_status(image_path, "queued")
+            return
+
+        if severity == "warn":
+            answer = QMessageBox.question(
+                self, "Less free VRAM than expected",
+                f"<b>{summary}</b><br><br>"
+                f"This preset estimates ~{peak_gib:.1f} GiB peak vs "
+                f"{free_gib:.1f} GiB free on "
+                f"{probe.name or 'the GPU'} (budget {budget_gib} GiB).<br><br>"
+                f"Likely cause: another process (FH6, browser, another "
+                f"GPU job) is holding memory.<br><br>"
+                f"<b>Recommended:</b> close other GPU apps and re-Start. "
+                f"Or proceed and let the engine chunk-K against the "
+                f"smaller free pool — slower, may still OOM if free "
+                f"shrinks further.<br><br>"
+                f"Proceed anyway?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                self.queue.set_status(image_path, "queued")
+                return
         chunk_warning = ""
         if budget_gib > 0 and peak_gib > budget_gib * 0.85:
             n_chunks = max(2, int(peak_gib / (budget_gib * 0.85)) + 1)
