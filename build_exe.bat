@@ -16,6 +16,7 @@ pyinstaller ^
     --add-data "LICENSE;." ^
     --add-data "NOTICE;." ^
     --add-data "THIRD_PARTY_NOTICES.md;." ^
+    --add-data "SplashScreen.mp4;." ^
     --add-data "Song1OpenSource.mp3;." ^
     --add-data "Song2OpenSource.mp3;." ^
     --add-data "Song3OpenSource.mp3;." ^
@@ -61,6 +62,7 @@ pyinstaller ^
     --hidden-import fd6.gui.texture_preview_panel ^
     --hidden-import fd6.gui.inject_worker ^
     --hidden-import fd6.gui.inject_dialog ^
+    --hidden-import fd6.gui.splash ^
     --hidden-import fd6.gui.brand_banner ^
     --hidden-import fd6.gui.themes ^
     --hidden-import fd6.shapegen.render ^

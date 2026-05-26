@@ -312,7 +312,7 @@ def test_default_model_path_uses_pyinstaller_meipass_models(tmp_path, monkeypatc
     internal_model.write_bytes(b"bundle")
     monkeypatch.delenv("FD6_MODELS_DIR", raising=False)
     monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "executable", str(dist / "FD64FH6354221_onnx.exe"))
+    monkeypatch.setattr(sys, "executable", str(dist / "FD6MultiSupport_onnx.exe"))
     monkeypatch.setattr(sys, "_MEIPASS", str(dist / "_internal"), raising=False)
     monkeypatch.chdir(work)
 

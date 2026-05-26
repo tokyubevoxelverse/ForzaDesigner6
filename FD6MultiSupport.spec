@@ -5,7 +5,7 @@ from PyInstaller.utils.hooks import collect_submodules
 
 datas = [('fd6\\settings\\profiles', 'fd6\\settings\\profiles'), ('fd6\\inject\\patterns', 'fd6\\inject\\patterns'), ('LICENSE', '.'), ('NOTICE', '.'), ('THIRD_PARTY_NOTICES.md', '.'), ('SplashScreen.mp4', '.'), ('Song1OpenSource.mp3', '.'), ('Song2OpenSource.mp3', '.'), ('Song3OpenSource.mp3', '.'), ('tools\\fd6_128.png', 'tools'), ('AppIconTransparent.png', '.'), ('BlossomParticle.png', '.'), ('fonts', 'fonts'), ('Pink.png', '.'), ('Yellow.png', '.'), ('Purple.png', '.'), ('Green.png', '.'), ('Blue.png', '.'), ('Orange.png', '.')]
 binaries = []
-hiddenimports = ['fd6.gui.music', 'fd6.gui.particles', 'fd6.gui.fonts', 'fd6.gui.image_search', 'PySide6.QtWebEngineCore', 'PySide6.QtWebEngineWidgets', 'PySide6.QtWebChannel', 'PySide6.QtWebEngineQuick', 'PySide6.QtPrintSupport', 'fd6.inject.cli', 'fd6.inject.discovery', 'fd6.inject.patterns_io', 'fd6.inject.win_process', 'fd6.inject.fh6_injector', 'fd6.inject.game_profiles', 'fd6.inject.rtti_locator', 'fd6.gui.inject_worker', 'fd6.gui.inject_dialog', 'fd6.gui.splash', 'fd6.gui.brand_banner', 'fd6.gui.themes', 'fd6.shapegen.render', 'PySide6.QtMultimedia', 'PySide6.QtMultimediaWidgets', 'torch', 'cupy']
+hiddenimports = ['fd6.gui.music', 'fd6.gui.particles', 'fd6.gui.fonts', 'fd6.gui.image_search', 'PySide6.QtWebEngineCore', 'PySide6.QtWebEngineWidgets', 'PySide6.QtWebChannel', 'PySide6.QtWebEngineQuick', 'PySide6.QtPrintSupport', 'fd6.inject.cli', 'fd6.inject.discovery', 'fd6.inject.patterns_io', 'fd6.inject.win_process', 'fd6.inject.fh6_injector', 'fd6.inject.game_profiles', 'fd6.inject.rtti_locator', 'fd6.suite', 'fd6.ac', 'fd6.ac.profiles', 'fd6.ac.livery_paths', 'fd6.ac.car_catalog', 'fd6.ac.texture_pipeline', 'fd6.ac.slot_planner', 'fd6.ac.livery_writer', 'fd6.gui.game_suite_dialog', 'fd6.gui.ac_settings_panel', 'fd6.gui.texture_preview_panel', 'fd6.gui.inject_worker', 'fd6.gui.inject_dialog', 'fd6.gui.splash', 'fd6.gui.brand_banner', 'fd6.gui.themes', 'fd6.shapegen.render', 'PySide6.QtMultimedia', 'PySide6.QtMultimediaWidgets', 'torch', 'cupy']
 datas += collect_data_files('PySide6')
 datas += collect_data_files('torch')
 datas += collect_data_files('cupy')
@@ -40,7 +40,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='FD64FH6354221_onedir',
+    name='FD6MultiSupport',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -60,5 +60,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='FD64FH6354221_onedir',
+    name='FD6MultiSupport',
 )

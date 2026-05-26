@@ -20,13 +20,13 @@
 
 > Convert any image into a vinyl group for **Forza Horizon 3, 4, 5, or 6**, or into a livery for **Assetto Corsa Competizione**.
 
-**Repo:** https://github.com/tokyubevoxelverse/ForzaDesigner6 · **License:** MIT · **Windows 10/11 x64**
+**Repo:** https://github.com/NcaMoq/ForzaDesigner6 · **License:** MIT · **Windows 10/11 x64**
 
 ---
 
 ## Install
 
-1. Download the `FD64FH6354221` package from [Releases](https://github.com/tokyubevoxelverse/ForzaDesigner6/releases).
+1. Download the `FD6MultiSupport` package from [Releases](https://github.com/NcaMoq/ForzaDesigner6/releases).
 2. Double-click — no installer, no admin rights. Windows SmartScreen → "More info" → "Run anyway".
 
 Source build: Python 3.10+, `pip install -r requirements.txt`. Microsoft Visual C++ Redistributable is normally already installed; if FD6 fails to launch, grab it [here](https://aka.ms/vs/17/release/vc_redist.x64.exe).
@@ -39,7 +39,7 @@ GPU generation is bundled in the packaged build. For source runs, install a CUDA
 
 **Generate:**
 
-1. Launch `FD64FH6354221.exe`. Click **Upload Image…** and pick a JPEG/PNG.
+1. Launch `FD6MultiSupport.exe`. Click **Upload Image…** and pick a JPEG/PNG.
 2. Right panel: pick a **Profile** (`balanced` recommended) and **Stop at shapes** (1500 or 3000 typical).
 3. Optional: set **Compute** to `GPU (CUDA)` to run generation on the GPU.
 4. Click **Start**. Watch the live preview rebuild your image. The JSON auto-saves next to your source image when done.
@@ -54,7 +54,7 @@ GPU generation is bundled in the packaged build. For source runs, install a CUDA
 - From source, install `onnxruntime` with `pip install -e ".[line-guide]"` or `onnxruntime-gpu` with `pip install -e ".[line-guide-gpu]"`.
 - On Windows, DirectML can be used with `pip install -e ".[line-guide-directml]"` when CUDA provider dependencies are unavailable.
 - Packaged builds can use the external guide image path immediately.
-- The ONNX-enabled package is built with `.\build_exe_onnx.bat`. It bundles ONNX Runtime DirectML and CPU providers, plus the generated reference model under `_internal\models\line_guide.onnx`.
+- The ONNX-enabled package is built with `.\build_exe_onnx.bat` as `FD6MultiSupport_onnx`. It bundles ONNX Runtime DirectML and CPU providers, plus the generated reference model under `_internal\models\line_guide.onnx`.
 - If a copied packaged build reports `No module named 'onnxruntime'`, it is the normal package, not the ONNX-enabled package.
 - Run `python tools/line_guide_benchmark.py --output docs/line_guide_measurements.json` to record speed, VRAM, RMS, edge F1, gradient error, and SSIM for line guide on/off. Add `--model models\line_guide.onnx --output docs\line_guide_measurements_onnx.json` to measure the ONNX extraction path.
 
@@ -110,7 +110,7 @@ ACC export does not require ACC to be running and does not touch ACC's process m
 ## Build from source
 
 ```powershell
-git clone https://github.com/tokyubevoxelverse/ForzaDesigner6.git
+git clone https://github.com/NcaMoq/ForzaDesigner6.git
 cd ForzaDesigner6
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -118,8 +118,8 @@ pip install -r requirements.txt
 
 python -m fd6                # run from source
 pytest                       # run tests
-.\build_exe.bat              # → dist/FD64FH6354221\
-.\build_exe_onnx.bat         # → dist/FD64FH6354221_onnx\
+.\build_exe.bat              # → dist/FD6MultiSupport\
+.\build_exe_onnx.bat         # → dist/FD6MultiSupport_onnx\
 ```
 
 For editable development installs:

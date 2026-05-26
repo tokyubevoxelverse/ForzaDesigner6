@@ -2,9 +2,9 @@
 build*/
 dist*/
 *.spec
-!FD64FH6354221.spec
-!FD64FH6354221_onnx.spec
-!FD64FH6354221_onedir.spec
+!FD6MultiSupport.spec
+!FD6MultiSupport_onnx.spec
+!FD6MultiSupport_onedir.spec
 *.log
 *.tmp
 

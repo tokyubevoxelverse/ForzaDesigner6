@@ -69,15 +69,15 @@ ONNX-enabled package:
 Confirm the built package contains:
 
 ```powershell
-Test-Path dist\FD64FH6354221\LICENSE
-Test-Path dist\FD64FH6354221\NOTICE
-Test-Path dist\FD64FH6354221\THIRD_PARTY_NOTICES.md
-Test-Path dist\FD64FH6354221_onnx\LICENSE
-Test-Path dist\FD64FH6354221_onnx\NOTICE
-Test-Path dist\FD64FH6354221_onnx\THIRD_PARTY_NOTICES.md
+Test-Path dist\FD6MultiSupport\LICENSE
+Test-Path dist\FD6MultiSupport\NOTICE
+Test-Path dist\FD6MultiSupport\THIRD_PARTY_NOTICES.md
+Test-Path dist\FD6MultiSupport_onnx\LICENSE
+Test-Path dist\FD6MultiSupport_onnx\NOTICE
+Test-Path dist\FD6MultiSupport_onnx\THIRD_PARTY_NOTICES.md
 ```
 
-If PyInstaller cannot overwrite `dist\FD64FH6354221_onnx`, close any running
+If PyInstaller cannot overwrite `dist\FD6MultiSupport_onnx`, close any running
 copy of the application that was started from that folder and build again.
 
 ## Release Notes
