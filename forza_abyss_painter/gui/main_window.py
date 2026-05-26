@@ -1324,15 +1324,20 @@ class MainWindow(QMainWindow):
         if not prompt_install_or_use_existing(self):
             return
         dlg = GenerateLocallyDialog(self, initial_source_path=source)
-        if dlg.exec() == dlg.Accepted and dlg.output_path:
+        from PySide6.QtWidgets import QDialog as _QDialog
+        if dlg.exec() == _QDialog.DialogCode.Accepted and dlg.output_path:
             self._on_json_loaded_for_preview(dlg.output_path)
 
     def _on_polish_requested(self, json_path: Path) -> None:
         """#86 — user clicked Polish loaded JSON. Resolve the source
         image, open PolishDialog, on accept spawn GpuGenWorker with the
         polish config."""
-        from PySide6.QtCore import QThread
         from PySide6.QtWidgets import QMessageBox
+        if getattr(self, "_polish_thread", None) and self._polish_thread.isRunning():
+            from PySide6.QtWidgets import QMessageBox as _QMessageBox
+            _QMessageBox.information(self, "Polish running",
+                                       "A polish run is already in progress.")
+            return
         source = self._resolve_source_for_loaded_json(json_path)
         if source is None:
             return
@@ -1349,13 +1354,15 @@ class MainWindow(QMainWindow):
         dlg = PolishDialog(self,
                             loaded_json_path=json_path,
                             source_image_path=source)
-        if dlg.exec() != dlg.Accepted:
+        from PySide6.QtWidgets import QDialog as _QDialog
+        if dlg.exec() != _QDialog.DialogCode.Accepted:
             return
         values = dlg.values()
 
-        # Detect sticker mode from the source image's transparency, same
-        # as the renderer does. If the user set the sticker checkbox, that
-        # also flips this on (matches fresh-gen ergonomics).
+        # Mirror the fresh-gen sticker convention: sticker_mode = "no
+        # white-bg composite" = the "Add white background" checkbox is
+        # UNCHECKED. `not isChecked()` → True means transparent target
+        # → sticker_mode=True.
         sticker = bool(getattr(self.settings_panel, "sticker_mode_cb", None) and
                         not self.settings_panel.sticker_mode_cb.isChecked())
 
@@ -1410,20 +1417,23 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Polish — step {current}/{total}")
 
     def _on_polish_done(self, output_path: str, shape_count: int) -> None:
-        from pathlib import Path as _Path
-        path = _Path(output_path)
+        path = Path(output_path)
         self.statusBar().showMessage(
             f"Polish done — {shape_count} shapes saved to {path.name}", 10000,
         )
         # Auto-load the polished JSON into the preview so the user can
         # compare visually + click Inject when ready.
         self._on_json_loaded_for_preview(path)
+        self._polish_thread = None
+        self._polish_worker = None
 
     def _on_polish_error(self, stage: str, message: str) -> None:
         from PySide6.QtWidgets import QMessageBox
         QMessageBox.critical(self, f"Polish failed — {stage}",
                               f"Stage: {stage}\n\n{message}")
         self.statusBar().showMessage(f"Polish failed at {stage}.", 10000)
+        self._polish_thread = None
+        self._polish_worker = None
 
     def _on_json_loaded_for_preview(self, json_path: Path) -> None:
         """User clicked Upload JSON -> load the file, render shapes onto the preview pane.
