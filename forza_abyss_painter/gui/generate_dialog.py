@@ -72,7 +72,7 @@ class GenerateLocallyDialog(QDialog):
     return path to generated JSON via `self.output_path` after Accepted.
     """
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, initial_source_path: Path | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Generate shapes locally (GPU)")
         self.setModal(True)
@@ -180,6 +180,20 @@ class GenerateLocallyDialog(QDialog):
         self.generate_btn.clicked.connect(self._on_generate_clicked)
         btn_row.addWidget(self.generate_btn)
         root.addLayout(btn_row)
+
+        # Pre-fill source from #85 re-shape-gen flow if caller provided it
+        # AND the file exists. Missing-file case falls through silently
+        # so the user re-picks (avoids running on a stale path).
+        if initial_source_path is not None and Path(initial_source_path).is_file():
+            self.source_path = Path(initial_source_path)
+            self.source_field.setText(str(self.source_path))
+            self.generate_btn.setEnabled(True)
+            preset = self.preset_combo.currentData()
+            if preset:
+                stem = self.source_path.stem
+                suggested = (self.source_path.parent /
+                             f"{stem}_{preset['num_shapes']}.json")
+                self.output_field.setPlaceholderText(str(suggested))
 
     # ----------------------------------------------------- ui event handlers
 
