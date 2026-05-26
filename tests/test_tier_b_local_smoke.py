@@ -91,14 +91,20 @@ def test_tier_b_smoke(qapp, tmp_path):
     try:
         win._on_json_loaded_for_preview(shapes)
         assert win._loaded_json_path == shapes
-        assert win.upload.reshape_btn.isVisible(), (
-            "Re-shape-gen button did not become visible after JSON load — "
-            "set_json_loaded wiring is missing"
-        )
-        assert win.upload.polish_btn.isVisible(), (
-            "Polish button did not become visible after JSON load — "
-            "set_json_loaded wiring is missing"
-        )
+        # Qt requires the ancestor chain to be shown before isVisible()
+        # reflects child state — show the window briefly, then hide.
+        win.show()
+        try:
+            assert win.upload.reshape_btn.isVisible(), (
+                "Re-shape-gen button did not become visible after JSON load — "
+                "set_json_loaded wiring is missing"
+            )
+            assert win.upload.polish_btn.isVisible(), (
+                "Polish button did not become visible after JSON load — "
+                "set_json_loaded wiring is missing"
+            )
+        finally:
+            win.hide()
     finally:
         # Explicit cleanup so any second test construction wouldn't trip
         # the deleteLater hazard (CLAUDE.md §8h).
