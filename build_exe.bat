@@ -19,6 +19,7 @@ pyinstaller ^
     --add-data "forza_abyss_painter\shapegen;forza_abyss_painter\shapegen" ^
     --add-data "forza_abyss_painter\io;forza_abyss_painter\io" ^
     --add-data "forza_abyss_painter\runtime;forza_abyss_painter\runtime" ^
+    --add-data "forza_abyss_painter\cli;forza_abyss_painter\cli" ^
     --add-data "SplashScreen.mp4;." ^
     --add-data "Song1OpenSource.mp3;." ^
     --add-data "Song2OpenSource.mp3;." ^

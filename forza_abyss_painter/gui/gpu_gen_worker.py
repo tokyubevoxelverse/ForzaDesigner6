@@ -26,6 +26,7 @@ finished signals in order. SIGTERM lets torch_runner do its own cleanup
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -143,13 +144,25 @@ class GpuGenWorker(QObject):
             cmd = [str(self._py), "-m",
                    "forza_abyss_painter.runtime.torch_runner",
                    "--config", str(self._config_path)]
-            logger.log("gen_worker_subprocess_spawn", cmd=cmd)
+            # Inherit parent env + set PyTorch allocator config to reduce
+            # fragmentation overhead. Without expandable_segments, the
+            # CUDA caching allocator can reserve 2-3× the actually-needed
+            # peak (Cursor's QUASAR smoke: 47.5 GiB reported allocated
+            # against ~17 GiB of real intermediates). expandable_segments
+            # makes the allocator track per-stream allocations more
+            # tightly + release back to the driver between phases, so
+            # the chunked-K math actually maps to the observed peak.
+            env = dict(os.environ)
+            env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+            logger.log("gen_worker_subprocess_spawn", cmd=cmd,
+                       pytorch_alloc_conf=env["PYTORCH_CUDA_ALLOC_CONF"])
             self._proc = self._popen_factory(
                 cmd,
                 stderr=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 text=True,
                 bufsize=1,
+                env=env,
                 # CREATE_NO_WINDOW on Windows — same fix as the install
                 # phase. Without this, testers see a leaked cmd window
                 # during GPU generation and close it, killing the

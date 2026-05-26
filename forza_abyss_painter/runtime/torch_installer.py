@@ -205,6 +205,13 @@ RUNNER_REQUIRED_SUBPACKAGES: tuple[str, ...] = (
     "shapegen",
     "io",
     "runtime",
+    # cli holds fap-generate (the headless CLI shim around
+    # torch_runner). Without copying it, users invoking `fap-generate`
+    # against the embedded Python hit ModuleNotFoundError on
+    # `forza_abyss_painter.cli`. Cursor's QUASAR smoke fell back to
+    # `python -m forza_abyss_painter.runtime.torch_runner --config ...`
+    # which is fine for IPC test but defeats the CLI feature.
+    "cli",
 )
 
 
@@ -730,9 +737,15 @@ def install_runtime(
 
     # Phase 9: write the marker.
     _report(95, "Writing install marker")
+    # Marker's torch_version derives the +cu... suffix from the index
+    # URL so a future cu12X bump stays in sync without code edits.
+    # Cursor's QUASAR smoke caught the stale '+cu121' hardcode when we
+    # bumped to cu128 — this prevents the next bump from drifting.
+    _index_suffix = TORCH_CUDA_INDEX.rstrip("/").rsplit("/", 1)[-1]
     info = RuntimeInfo(
         python_version=EMBED_PYTHON_VERSION,
-        torch_version=TORCH_VERSION + "+cu121" if cuda_available else TORCH_VERSION,
+        torch_version=(f"{TORCH_VERSION}+{_index_suffix}"
+                       if cuda_available else TORCH_VERSION),
         cuda_available=cuda_available,
         cuda_device_name=cuda_device_name,
         installed_at_utc=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),

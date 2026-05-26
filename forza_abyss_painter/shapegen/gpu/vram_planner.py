@@ -25,12 +25,24 @@ changes, update this module's `_peak_bytes_per_candidate` too.
 from __future__ import annotations
 
 
-# Calibrated safety multipliers for each scoring path. Don't tune
-# without re-measuring against the engine's actual peak — these are
-# what the colab CELL_RESOLUTION_PLANNER converged on after
-# bench-testing real runs.
-BBOX_LOCAL_SAFETY = 5.5    # crop-local scoring; smaller footprint, more intermediates
-FULL_CANVAS_SAFETY = 3.5   # full-canvas scoring; bigger footprint, fewer intermediates
+# Calibrated safety multipliers for each scoring path. RE-CALIBRATED
+# 2026-05-25 against Cursor's QUASAR smoke evidence:
+#   K=8192 + max_resolution=720 + bbox_local=True
+#   predicted with old 5.5 mult: ~17.7 GiB
+#   actually allocated by PyTorch: 47.5 GiB (cu128 + torch 2.7)
+#   → real multiplier ≈ 5.5 × (47.5/17.7) ≈ 14.7
+#
+# Bumping to 15.0 with a small safety margin for fragmentation
+# variability. The PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# env var (set in torch_runner) reduces but doesn't eliminate the
+# fragmentation overhead — calibration still has to account for it.
+#
+# If a future torch / driver bump changes the allocator behavior,
+# Cursor's smoke (run_gpu_smoke.ps1 stress tier) is the canary —
+# any new under-prediction shows up immediately as OOM on a budgeted
+# run.
+BBOX_LOCAL_SAFETY = 15.0    # was 5.5; under-predicted cu128 + torch 2.7
+FULL_CANVAS_SAFETY = 8.0    # was 3.5; same calibration ratio applied
 
 # Chunk-size floor — Python overhead dominates below this; budgets
 # too tight to fit 8 candidates are user errors (lower the resolution).

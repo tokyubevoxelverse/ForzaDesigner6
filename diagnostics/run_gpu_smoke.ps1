@@ -1,8 +1,10 @@
-# GPU smoke runner — automates the steps in docs/CURSOR_GPU_SMOKE_TEST.md
+# GPU smoke runner - automates the steps in docs/CURSOR_GPU_SMOKE_TEST.md
 #
 # Usage (from anywhere on QUASAR):
 #   powershell -NoProfile -ExecutionPolicy Bypass -File `
 #     "\\QUASAR\ContentCreation\ForzaAbyssPainter_build\diagnostics\run_gpu_smoke.ps1"
+#
+# Also copies to diagnostics\smoke_results_upstream\ when run from Cursor.
 #
 # Produces:
 #   ~\Desktop\smoke_results\
@@ -14,17 +16,24 @@
 #
 # Steps 1 (fap-generate) + 4 (probe + diag) are automated; step 3
 # (cancel mid-run) requires a human or a sleeper script and is left
-# as an exercise — Cursor can run it manually or extend this script.
+# as an exercise - Cursor can run it manually or extend this script.
 
 $ErrorActionPreference = 'Continue'   # don't bail on first non-zero exit
 
 # --- paths ---
+# Script lives on the QUASAR share under diagnostics\ - resolve build root from here.
+$buildRoot = Split-Path $PSScriptRoot -Parent
+$desktopBuild = Join-Path $env:USERPROFILE 'Desktop\ForzaAbyssPainter_build'
+if (-not (Test-Path (Join-Path $buildRoot 'dist\ForzaAbyssPainter.exe')) -and (Test-Path (Join-Path $desktopBuild 'dist\ForzaAbyssPainter.exe'))) {
+    $buildRoot = $desktopBuild
+}
+
 $resultsDir = Join-Path $env:USERPROFILE 'Desktop\smoke_results'
 New-Item -ItemType Directory -Force -Path $resultsDir | Out-Null
 
 $py = Join-Path $env:LOCALAPPDATA 'ForzaAbyssPainter\runtime\python311\python.exe'
 $marker = Join-Path $env:LOCALAPPDATA 'ForzaAbyssPainter\runtime\installed.json'
-$source = Join-Path $env:USERPROFILE 'Desktop\ForzaAbyssPainter_build\source'
+$source = Join-Path $buildRoot 'source'
 $seed = Join-Path $source 'assets\forza_abyss_painter_logo.png'
 
 $outJson = Join-Path $resultsDir 'smoke_logo_1000.json'
@@ -42,7 +51,7 @@ function Write-Section($title) {
 
 # Initialize the summary report with the timestamp + machine info.
 @"
-# QUASAR GPU smoke run — $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+# QUASAR GPU smoke run - $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
 
 Machine: $env:COMPUTERNAME
 User: $env:USERNAME
@@ -62,7 +71,7 @@ if (-not (Test-Path $py)) {
     exit 2
 }
 if (-not (Test-Path $marker)) {
-    Write-Host "FAIL: runtime marker missing — install not complete"
+    Write-Host "FAIL: runtime marker missing - install not complete"
     "## Pre-flight`n- FAIL: marker missing at $marker`n" | Add-Content $summary
     exit 2
 }
@@ -85,7 +94,7 @@ Write-Host "nvidia-smi (pre-run): $nvSmiPre"
 - Marker torch: $($markerJson.torch_version)
 - Marker cuda_available: $($markerJson.cuda_available)
 - Marker device: $($markerJson.cuda_device_name)
-- nvidia-smi pre-run: ``$nvSmiPre``
+- nvidia-smi pre-run: $nvSmiPre
 
 "@ | Add-Content $summary
 
@@ -96,18 +105,29 @@ Write-Section "Step 1: fap-generate 1000 shapes on the app logo"
 
 $t0 = Get-Date
 
-# Run the GPU shape-gen via the CLI. Stderr → log file so we capture
-# the JSON IPC line stream for triage. Stdout discarded (CLI doesn't
-# write any).
-& $py -m forza_abyss_painter.cli.generate `
-    --image $seed `
-    --output $outJson `
-    --num-shapes 1000 `
-    --max-resolution 720 `
-    --random-samples 8192 `
-    --vram-budget 8.0 `
-    --preset-label 'smoke-1000' `
-    2> $outStderr
+# GPU shape-gen: CLI if present, else torch_runner (embedded runtime
+# does not copy forza_abyss_painter.cli). Config UTF-8 no BOM.
+$runnerCfg = Join-Path $resultsDir 'smoke_runner_config.json'
+$genConfig = @{
+    image_path = $seed; output_json_path = $outJson
+    num_shapes = 1000; max_resolution = 720; random_samples = 8192
+    sticker_mode = $false; device = 'cuda'; vram_budget_gib = 8.0
+    preset_label = 'smoke-1000'; lock_alpha = $true
+} | ConvertTo-Json -Compress
+[System.IO.File]::WriteAllText($runnerCfg, $genConfig, (New-Object System.Text.UTF8Encoding $false))
+
+$hasCli = & $py -c "import importlib.util; print(importlib.util.find_spec('forza_abyss_painter.cli') is not None)" 2>$null
+if ($hasCli -eq 'True') {
+    & $py -m forza_abyss_painter.cli.generate `
+        --image $seed --output $outJson `
+        --num-shapes 1000 --max-resolution 720 `
+        --random-samples 8192 --vram-budget 8.0 `
+        --preset-label 'smoke-1000' `
+        2> $outStderr
+} else {
+    Write-Host "NOTE: cli not in embedded runtime; using torch_runner"
+    & $py -m forza_abyss_painter.runtime.torch_runner --config $runnerCfg 2> $outStderr
+}
 $rc = $LASTEXITCODE
 $elapsedS = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
 
@@ -130,7 +150,7 @@ if ($chunkedLine) {
 }
 
 # Validate output JSON structure.
-$validation = "(not validated — output missing)"
+$validation = "(not validated - output missing)"
 if (Test-Path $outJson) {
     try {
         $j = Get-Content $outJson -Raw | ConvertFrom-Json
@@ -158,26 +178,20 @@ if (Test-Path $outStderr) {
 - ms/shape (wall / shape_count): $([math]::Round($elapsedS * 1000.0 / 1000.0, 1))
 - Output file size: $outSize bytes
 - chunked-K log line: $($chunkedLine.Line)
-- nvidia-smi post-run: ``$nvSmiPost``
+- nvidia-smi post-run: $nvSmiPost
 - Output JSON validation: $validation
 - Stderr tail (last 5 lines):
-``````
 $stderrTail
-``````
 
 "@ | Add-Content $summary
 
 
 # ============================================================ Step 4: probe + diag
-# (Step 3 — interactive cancel — left for the human; see docs/CURSOR_GPU_SMOKE_TEST.md)
+# (Step 3 - interactive cancel - left for the human; see docs/CURSOR_GPU_SMOKE_TEST.md)
 
 Write-Section "Step 4a: GPU + runtime probe"
 
-$probeScript = Join-Path $source 'diagnostics\probe_gpu_and_runtime.py'
-if (-not (Test-Path $probeScript)) {
-    # Fall back to the SMB share location.
-    $probeScript = Join-Path $env:USERPROFILE 'Desktop\ForzaAbyssPainter_build\diagnostics\probe_gpu_and_runtime.py'
-}
+$probeScript = Join-Path $PSScriptRoot 'probe_gpu_and_runtime.py'
 if (Test-Path $probeScript) {
     py -3 $probeScript --output $probeJson --skip-kill-ladder
     if (Test-Path $probeJson) {
@@ -205,6 +219,14 @@ if (Test-Path $diagZip) {
 "@ | Add-Content $summary
 
 
+# ============================================================ Copy to SMB for upstream
+
+$smbOut = Join-Path $buildRoot 'diagnostics\smoke_results_upstream'
+New-Item -ItemType Directory -Force -Path $smbOut | Out-Null
+Copy-Item -Path (Join-Path $resultsDir '*') -Destination $smbOut -Force -ErrorAction SilentlyContinue
+Write-Host "Copied artifacts to: $smbOut"
+
+
 # ============================================================ Done
 
 Write-Section "Done"
@@ -217,4 +239,4 @@ Write-Host "  - $probeJson"
 Write-Host "  - $diagZip"
 Write-Host "  - $outStderr"
 Write-Host ""
-Write-Host "Step 3 (mid-run cancel) is interactive — see docs/CURSOR_GPU_SMOKE_TEST.md"
+Write-Host "Step 3 (mid-run cancel) is interactive - see docs/CURSOR_GPU_SMOKE_TEST.md"

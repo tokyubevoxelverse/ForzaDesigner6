@@ -111,7 +111,7 @@ def _stub_source_pkg(tmp_path):
         (src / sub / "__init__.py").write_text(f"# {sub}\n", encoding="utf-8")
         (src / sub / "real.py").write_text("# real impl\n", encoding="utf-8")
     # Excluded subpackages — should NOT be copied.
-    for excl in ("gui", "inject", "cli"):
+    for excl in ("gui", "inject"):
         (src / excl).mkdir()
         (src / excl / "__init__.py").write_text(
             f"raise ImportError('{excl} not needed for runner')",
@@ -273,6 +273,41 @@ def test_install_runtime_writes_marker_with_cuda_verdict(
     assert ti.is_runtime_installed() is False
 
 
+def test_marker_torch_version_suffix_derives_from_index_url(
+    _isolated_runtime, _stub_source_pkg,
+):
+    """Marker's torch_version is now '<TORCH_VERSION>+<index_suffix>'
+    derived from TORCH_CUDA_INDEX, not a hardcoded '+cu121'. Cursor's
+    QUASAR smoke caught the stale hardcode after the cu128 bump; this
+    test pins the derived behavior so the next index bump can't
+    silently drift again."""
+    embed_zip_bytes = _make_fake_embed_zip({
+        ti.embedded_python_exe().name: "x", "python311._pth": "#import site",
+    })
+    urlretrieve = _make_fake_urlretrieve({
+        ti.EMBED_PYTHON_URL: embed_zip_bytes,
+        ti.GET_PIP_URL: b"# stub",
+    })
+    sp_run = _make_fake_subprocess_success(
+        stdout_for_verify=json.dumps({
+            "cuda_available": True, "device_name": "FAKE GPU",
+            "compute_capability": [12, 0], "kernel_run_ok": True,
+            "torch_version": "2.7.0+cu128",
+        }),
+    )
+    info = ti.install_runtime(
+        _urlretrieve=urlretrieve, _subprocess_run=sp_run,
+        _source_pkg_dir=_stub_source_pkg,
+    )
+    # Suffix must match whatever TORCH_CUDA_INDEX currently points at,
+    # NOT a hardcoded '+cu121'.
+    expected_suffix = ti.TORCH_CUDA_INDEX.rstrip("/").rsplit("/", 1)[-1]
+    assert info.torch_version == f"{ti.TORCH_VERSION}+{expected_suffix}", (
+        f"marker torch_version={info.torch_version!r} doesn't derive from "
+        f"index URL — expected '{ti.TORCH_VERSION}+{expected_suffix}'"
+    )
+
+
 # ====================================================================
 # Idempotency
 
@@ -422,18 +457,29 @@ def test_copy_runner_package_includes_required_subpackages(
         assert (site_pkgs / "forza_abyss_painter" / sub / "real.py").is_file()
 
 
-def test_copy_runner_package_excludes_gui_inject_cli(
+def test_copy_runner_package_excludes_gui_and_inject(
     _isolated_runtime, _stub_source_pkg, tmp_path,
 ):
-    """gui/inject/cli must NOT land in the embedded site-packages —
-    they pull heavy deps (PySide6, Windows process APIs) that the
-    runner doesn't need + that pollute the embedded install."""
+    """gui + inject must NOT land in the embedded site-packages —
+    they pull heavy deps (PySide6, Windows process APIs) the runner
+    doesn't need + that pollute the embedded install.
+
+    `cli` USED to be excluded too, but Cursor's QUASAR smoke surfaced
+    that fap-generate fails inside the embedded runtime without it
+    (ModuleNotFoundError: forza_abyss_painter.cli). cli's deps are
+    just io + runtime which are already required, so it's safe to
+    include now and serves the headless-CLI feature."""
     site_pkgs = tmp_path / "site_pkgs_dest"
     ti._copy_runner_package(_stub_source_pkg, site_pkgs)
-    for excl in ("gui", "inject", "cli"):
+    for excl in ("gui", "inject"):
         assert not (site_pkgs / "forza_abyss_painter" / excl).exists(), (
             f"excluded subpackage {excl!r} was copied into embedded site-packages"
         )
+    # cli SHOULD be copied (it's required now).
+    assert (site_pkgs / "forza_abyss_painter" / "cli").is_dir(), (
+        "cli subpackage missing — fap-generate won't be importable inside "
+        "the embedded runtime"
+    )
 
 
 def test_copy_runner_package_preserves_top_level_files(

@@ -501,8 +501,15 @@ def _run_gpu_inner(
     )
     if _k_chunk > 0:
         n_chunks = (cfg.random_samples + _k_chunk - 1) // _k_chunk
+        # stderr (not stdout) so the activation shows up in the IPC
+        # capture stream — Cursor's smoke missed this line because
+        # print() defaults to stdout, which torch_runner's caller
+        # doesn't tee. Failing to log this silently lost the signal
+        # that chunked-K was (or wasn't) engaging on a 47.5-GiB OOM.
+        import sys as _sys
         print(f"[chunked-K] K={cfg.random_samples}, chunk_size={_k_chunk}, "
-              f"n_chunks={n_chunks}, budget={cfg.vram_budget_gib:.1f} GiB")
+              f"n_chunks={n_chunks}, budget={cfg.vram_budget_gib:.1f} GiB",
+              file=_sys.stderr, flush=True)
 
     if alpha_mask is not None:
         # Fill out-of-silhouette target pixels with the canvas substrate color (grey 40).

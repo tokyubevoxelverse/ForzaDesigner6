@@ -69,6 +69,7 @@ datas = [
     ("forza_abyss_painter/shapegen", "forza_abyss_painter/shapegen"),
     ("forza_abyss_painter/io", "forza_abyss_painter/io"),
     ("forza_abyss_painter/runtime", "forza_abyss_painter/runtime"),
+    ("forza_abyss_painter/cli", "forza_abyss_painter/cli"),
     ("SplashScreen.mp4", "."),
     ("Song1OpenSource.mp3", "."),
     ("Song2OpenSource.mp3", "."),
