@@ -213,7 +213,19 @@ class MainWindow(QMainWindow):
             )
         else:
             device = info.cuda_device_name or "CUDA device"
-            self._gpu_status_label.setText(f"GPU: ready — {device}")
+            # Append live free-VRAM if nvidia-smi works on this box.
+            # Cheap call — cached for 5s so the status bar can refresh
+            # frequently without spawning subprocesses. Falls back to
+            # the plain "ready" string when nvidia-smi is unavailable.
+            from forza_abyss_painter.runtime.nvidia_smi import probe_free_vram
+            probe = probe_free_vram()
+            if probe.available and probe.free_gib is not None and probe.total_gib is not None:
+                vram_suffix = (
+                    f"  •  {probe.free_gib:.1f} / {probe.total_gib:.1f} GiB free"
+                )
+            else:
+                vram_suffix = ""
+            self._gpu_status_label.setText(f"GPU: ready — {device}{vram_suffix}")
             self._gpu_status_label.setStyleSheet(
                 "padding: 0 8px; color: #6fbf73; font-size: 11px;"
             )
@@ -986,6 +998,43 @@ class MainWindow(QMainWindow):
         # tuning random_samples / max_resolution.
         peak_gib = self.settings_panel.estimate_peak_vram_gib(profile)
         budget_gib = self.settings_panel.selected_vram_budget_gib()
+
+        # Pre-launch nvidia-smi free-VRAM probe (#125). The user-set
+        # budget is what THEY think is safe; nvidia-smi tells us what's
+        # ACTUALLY free right now. If FH6 / Chrome / another tool is
+        # squatting on VRAM, the budget is lying and the run will OOM
+        # despite our chunked-K math. Surface the mismatch as a modal
+        # BEFORE we go into the chunking decision below.
+        from forza_abyss_painter.runtime.nvidia_smi import probe_free_vram
+        probe = probe_free_vram(force=True)
+        if probe.available and probe.free_gib is not None:
+            free_gib = probe.free_gib
+            # Only warn if the effective free is meaningfully below the
+            # budget AND the run would actually need most of that. A
+            # tiny preset on a busy card doesn't need this dialog.
+            if (free_gib < budget_gib * 0.9
+                    and peak_gib > free_gib * 0.85):
+                answer = QMessageBox.question(
+                    self, "Less free VRAM than your budget says",
+                    f"<b>nvidia-smi reports {free_gib:.1f} GiB free</b> "
+                    f"on {probe.name or 'the GPU'}, but your VRAM "
+                    f"budget is set to <b>{budget_gib} GiB</b>.<br><br>"
+                    f"This preset estimates a peak of "
+                    f"<b>~{peak_gib:.1f} GiB</b>, which won't fit in "
+                    f"the actual free VRAM. Likely cause: another "
+                    f"process (FH6, browser, another GPU job) is "
+                    f"holding memory.<br><br>"
+                    f"<b>Recommended:</b> close other GPU apps and "
+                    f"re-Start. Or proceed anyway and let the engine "
+                    f"chunk against the smaller real free pool — "
+                    f"slower, may still OOM if free shrinks further.<br><br>"
+                    f"Proceed anyway?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No,   # default No — let user fix it
+                )
+                if answer != QMessageBox.Yes:
+                    self.queue.set_status(image_path, "queued")
+                    return
         chunk_warning = ""
         if budget_gib > 0 and peak_gib > budget_gib * 0.85:
             n_chunks = max(2, int(peak_gib / (budget_gib * 0.85)) + 1)
