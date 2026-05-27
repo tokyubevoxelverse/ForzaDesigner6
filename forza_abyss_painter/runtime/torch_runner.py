@@ -637,6 +637,57 @@ def _run_polish_only(cfg: RunConfig, stream, logger) -> int:
     return 0
 
 
+def _write_snapshot(
+    cfg: "RunConfig",
+    shapes_list: list,
+    count: int,
+    image_w: int,
+    image_h: int,
+) -> "Path":
+    """Save a partial snapshot to <output_stem>_<count>.json next to the
+    final output. Embeds _run_config breadcrumb for resume.
+
+    Writes the dict directly (not via save_json) because save_json
+    expects an FD6Document dataclass that has no `_run_config` field.
+    Atomic write: temp file + os.replace().
+    """
+    import json as _json
+    import os as _os
+    import time as _time
+    from forza_abyss_painter.io.snapshots import snapshot_path_for
+
+    snap_path = snapshot_path_for(cfg.output_json_path, count)
+    tmp_path = snap_path.with_suffix(snap_path.suffix + ".tmp")
+
+    doc = {
+        "format": "fd6.shapes",
+        "version": 1,
+        "source_image": cfg.image_path.name,
+        "image_size": [image_w, image_h],
+        "shape_count": count,
+        "generated_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+        "profile": cfg.preset_label,
+        "sticker_mode": bool(cfg.sticker_mode),
+        "shapes": list(shapes_list),
+        "_run_config": {
+            "target_shape_count": int(cfg.num_shapes),
+            "random_samples": int(cfg.random_samples),
+            "max_resolution": int(cfg.max_resolution),
+            "edge_strength": float(cfg.edge_strength),
+            "posterize_levels": int(cfg.posterize_levels),
+            "sticker_mode": bool(cfg.sticker_mode),
+            "lock_alpha": bool(cfg.lock_alpha),
+            "bbox_local": bool(cfg.bbox_local),
+            "joint_polish_steps": int(cfg.joint_polish_steps),
+            "vram_budget_gib": float(cfg.vram_budget_gib),
+            "preset_label": str(cfg.preset_label),
+        },
+    }
+    tmp_path.write_text(_json.dumps(doc), encoding="utf-8")
+    _os.replace(tmp_path, snap_path)
+    return snap_path
+
+
 def run(cfg: RunConfig, stream=sys.stderr) -> int:
     """Execute the configured run. Returns exit code."""
     # Subprocess gets its own log session file (process_label='runner')
@@ -723,11 +774,70 @@ def run(cfg: RunConfig, stream=sys.stderr) -> int:
     # it carries the current shapes-so-far list, which is what the EXE's
     # progress bar wants for its periodic preview render.
     def _checkpoint_cb(shape_idx: int, shapes_so_far: list) -> None:
+        # Always emit the lightweight checkpoint event (progress bar).
         emit(stream, {
             "kind": "checkpoint",
             "shape_count": shape_idx,
             "total": cfg.num_shapes,
         })
+        # Best-effort snapshot write + snapshot event. Disk failures
+        # don't crash the run — the snapshot is a safety net, not a
+        # hard requirement.
+        try:
+            snap_path = _write_snapshot(
+                cfg, shapes_so_far, shape_idx,
+                image_w=rgb.shape[1], image_h=rgb.shape[0],
+            )
+        except OSError as exc:
+            logger.log_exception("snapshot_write_failed", exc)
+            return
+        emit(stream, {
+            "kind": "snapshot",
+            "shape_count": shape_idx,
+            "total": cfg.num_shapes,
+            "path": str(snap_path),
+        })
+
+    # Resume support: when seed_shapes_path is set, load the
+    # partial snapshot + pass shapes to run_gpu(seed_shapes=...).
+    # The runner branch already validated mode==fresh in
+    # from_dict, so this is fresh-only by construction.
+    seed_shapes: list[dict] | None = None
+    if cfg.seed_shapes_path is not None:
+        try:
+            with logger.start_phase("load_seed_shapes",
+                                      path=str(cfg.seed_shapes_path)):
+                from forza_abyss_painter.io.exporter import load_json
+                seed_doc = load_json(str(cfg.seed_shapes_path))
+                seed_shapes = list(seed_doc.shapes)
+        except (OSError, ValueError, KeyError) as exc:
+            emit(stream, {
+                "kind": "error", "stage": "load_seed_shapes",
+                "message": f"{type(exc).__name__}: {exc}",
+            })
+            return 1
+        if not seed_shapes:
+            emit(stream, {
+                "kind": "error", "stage": "resume_empty_seed",
+                "message": f"seed_shapes_path "
+                           f"{cfg.seed_shapes_path} has zero shapes",
+            })
+            return 1
+        non_ell = [s for s in seed_shapes
+                   if s.get("type") != "rotated_ellipse"]
+        if non_ell:
+            kinds = sorted({s.get("type", "?") for s in non_ell})
+            emit(stream, {
+                "kind": "error", "stage": "resume_unsupported_shape",
+                "message": (
+                    f"resume supports rotated_ellipse only; found "
+                    f"{len(non_ell)} non-ellipse shape(s) of "
+                    f"type(s) {kinds} in "
+                    f"{cfg.seed_shapes_path.name}"
+                ),
+            })
+            return 1
+        logger.log("seed_loaded", count=len(seed_shapes))
 
     # Drive the run.
     try:
@@ -744,6 +854,7 @@ def run(cfg: RunConfig, stream=sys.stderr) -> int:
                 progress_every=cfg.progress_every,
                 checkpoint_cb=_checkpoint_cb if cfg.checkpoint_every > 0 else None,
                 checkpoint_every=cfg.checkpoint_every,
+                seed_shapes=seed_shapes,
             )
             logger.log("run_gpu_done", shapes_count=len(shapes_list))
     except RuntimeError as exc:
@@ -786,6 +897,35 @@ def run(cfg: RunConfig, stream=sys.stderr) -> int:
             "message": f"{type(exc).__name__}: {exc}",
         })
         return 1
+
+    # Embed _run_config in the FINAL output too (mirrors snapshots).
+    # save_json was the canonical schema-checked path; for the
+    # metadata we read+inject+rewrite — small file, negligible cost.
+    try:
+        import json as _json
+        doc_dict = _json.loads(
+            cfg.output_json_path.read_text(encoding="utf-8")
+        )
+        doc_dict["_run_config"] = {
+            "target_shape_count": int(cfg.num_shapes),
+            "random_samples": int(cfg.random_samples),
+            "max_resolution": int(cfg.max_resolution),
+            "edge_strength": float(cfg.edge_strength),
+            "posterize_levels": int(cfg.posterize_levels),
+            "sticker_mode": bool(cfg.sticker_mode),
+            "lock_alpha": bool(cfg.lock_alpha),
+            "bbox_local": bool(cfg.bbox_local),
+            "joint_polish_steps": int(cfg.joint_polish_steps),
+            "vram_budget_gib": float(cfg.vram_budget_gib),
+            "preset_label": str(cfg.preset_label),
+        }
+        cfg.output_json_path.write_text(
+            _json.dumps(doc_dict), encoding="utf-8",
+        )
+    except OSError as exc:
+        logger.log_exception("final_run_config_inject_failed", exc)
+        # Don't fail the whole run for a metadata-injection error —
+        # the JSON itself is valid + saved. Just log + continue.
 
     logger.log("runner_done",
                output_path=str(cfg.output_json_path),

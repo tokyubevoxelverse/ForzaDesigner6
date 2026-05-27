@@ -199,7 +199,7 @@ def _fake_engine(monkeypatch, tmp_path):
     captured = {}
     def _fake_run_gpu(target_rgb, cfg, alpha_mask=None,
                      progress_every=0, checkpoint_cb=None,
-                     checkpoint_every=0):
+                     checkpoint_every=0, seed_shapes=None):
         captured["target_rgb"] = target_rgb
         captured["cfg"] = cfg
         captured["alpha_mask_given"] = alpha_mask is not None
@@ -466,7 +466,7 @@ def test_real_subprocess_run_emits_started_then_done(tmp_path):
         fake_eng.GPUConfig = _Cfg
         def _fake_run_gpu(target_rgb, cfg, alpha_mask=None,
                           progress_every=0, checkpoint_cb=None,
-                          checkpoint_every=0):
+                          checkpoint_every=0, seed_shapes=None):
             shapes = [{
                 "type": "rotated_ellipse", "x": 5.0, "y": 5.0,
                 "rx": 2.0, "ry": 2.0, "angle": 0.0,
