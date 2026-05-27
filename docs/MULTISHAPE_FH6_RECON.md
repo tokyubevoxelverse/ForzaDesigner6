@@ -20,11 +20,44 @@
 | Shape type | GPU shape-gen | EXE injector | Verified in FH6? |
 |---|---|---|---|
 | `rotated_ellipse` | ✅ shipping | ✅ shipping | ✅ pinned (regression-tested) |
-| `rotated_rectangle` | ✅ eval notebook shipped | ⚠️ writes `shape_id=101` and divisor `/127` — **unverified** | ❌ |
-| `triangle` | ✅ eval notebook shipped | ❌ no path — 6 vertex floats don't fit standard 8-byte scale field | ❌ |
-| `rectangle` (axis-aligned) | ✅ eval | ⚠️ same write path as rotated_rectangle, never tested with angle=0 | ❌ |
+| `rectangle` (axis-aligned) | ✅ eval | ⚠️ writes `shape_id=101`, divisor `/127` — **byte ID confirmed, divisor unverified** | 🟡 partial |
+| `rotated_rectangle` | ✅ eval notebook shipped | ⚠️ shares rect write path — **never tested with angle ≠ 0** | 🟡 partial |
+| `triangle` (equilateral) | ✅ eval notebook shipped | ❌ injector writes `shape_id=101` (wrong) + `sx=sy=1.0` (no `hw`/`rx`/`r` field) | 🟡 byte ID = **103** confirmed; **vertex/size field unknown** |
+| `triangle` (right) | ✅ eval | ❌ same issue | 🟡 byte ID = **104** confirmed; **vertex/size field unknown** |
 
-We need to take this table from "⚠️ / ❌" to "✅ pinned" with regression tests.
+We need to take this table from "🟡 / ❌" to "✅ pinned" with regression tests.
+
+### 2026-05-27 — Cursor QUASAR recon update
+
+| Finding | Evidence |
+|---|---|
+| **Equilateral triangle = `shape_id_byte` 103** at `layer + 0x7A` | 300-layer probe (`round3_verdict_300_triangles.json`) |
+| **Right triangle = `shape_id_byte` 104** at `layer + 0x7A` | 300-layer probe (`round3_verdict_300_right_triangle.json`) |
+| **Rectangle = `shape_id_byte` 101** confirmed (was assumption) | 300-layer probe (`round3_verdict_300_rectangles.json`) |
+| **Triangles use the same `(x, -y)` position convention as ellipses** | Position-spread experiment confirmed visually in FH6 by user |
+| **Byte-flip 104 → 103 turns right-triangle into equilateral in-game** | Visual confirmation: flipped all 300 layers, every shape changed |
+| **Mixed 100×3 template repeats `103 → 101 → 102`** per logical triple | Heap dump of user's 3-shape texture |
+| **Heap fingerprint for 103/104 templates scores 4, not 5** | Locator strict path skips them; must use `--reuse-prior --skip-heap` |
+
+**What this resolves:**
+- §3 **Q1** answered for rectangle (101), equilateral triangle (103), right triangle (104).
+- §3 **Q5** Y-negation answered for triangles: same as ellipses.
+- §3 **Q4** STILL UNKNOWN: writing only `shape_id_byte` + pos/scale/color/rotation works to set the TYPE, but the triangle's actual geometry (vertex coordinates or unit-template size) hasn't been located. The byte-flip experiment changes type while keeping whatever size/position FH6 originally allocated for the layer; it does not prove we can write a triangle of arbitrary size from scratch.
+
+**What this implies for the injector (P0 gating, P1 inject):**
+
+1. `inject/fh6_injector.py::_score_layer` currently rejects any template whose `shape_id_byte ∉ {101, 102}` — strict fingerprint score 4 fails. Triangle templates get skipped silently.
+2. `GameProfile` (FH6) has `shape_id_other = 101` for ALL non-ellipses, including JSON `triangle`. Result: a `triangle` JSON gets written as a rectangle with `sx=sy=1.0` (no `hw`/`rx`/`r` field → default scale).
+3. Locator's heap fingerprint demands score-5 match; triangle-only templates max out at score 4 and require `--reuse-prior --skip-heap` to inject into.
+
+See §3 below for the corresponding QUASAR-validated answers + §8 for the roadmap that uses them.
+
+**Artifacts (on SMB):**
+- `\\QUASAR\ContentCreation\ForzaAbyssPainter_build\diagnostics\SHAPE_TYPE_MATRIX_UPSTREAM.md` — Cursor's full writeup
+- `diagnostics/round3_verdict_300_{rectangles,triangles,right_triangle}.json` — raw layer dumps
+- `diagnostics/layer_shape_experiment.py` — byte-flip + position-spread scripts
+- `diagnostics/layer_shape_experiment_log.json` — flip evidence with before/after byte values
+- `diagnostics/layer_experiment_snapshot.json` — 300-layer baseline (for restore)
 
 ---
 
@@ -90,20 +123,23 @@ memory-diff evidence, write a regression test that pins the answer in
 `tests/test_inject_multishape.py`, and update this doc with the verified
 value.
 
-### Q1: Is `shape_id=101` really the right byte for rectangle AND triangle?
+### Q1: Is `shape_id=101` really the right byte for rectangle AND triangle? **[ANSWERED 2026-05-27]**
 
-**Method:**
-1. Open painter-fh6 (the C++ tool we forked from). Insert a single
-   rectangle in the FH6 editor via painter's UI. Note its position.
-2. Run `forza_abyss_painter inject scan-float <rect.x>` to locate the
-   layer base address.
-3. `forza_abyss_painter inject dump <layer_addr>` — read byte at
-   `+0x7A`. Record value.
-4. Repeat for triangle and rotated_rectangle.
+**Answer:** No — only rectangle is 101. Triangles have their OWN IDs.
 
-**Acceptance:** Either confirm all three are `101`, or document the
-distinct IDs we find. Pin in
-`tests/test_inject_multishape.py::test_shape_id_byte_per_type`.
+| Shape | `shape_id_byte` @ `layer + 0x7A` | Source |
+|---|---|---|
+| Ellipse / circle | **102** | Pre-existing (production-validated) |
+| Rectangle / square | **101** | 300-layer probe `round3_verdict_300_rectangles.json` |
+| Equilateral triangle | **103** | 300-layer probe `round3_verdict_300_triangles.json` |
+| Right triangle | **104** | 300-layer probe `round3_verdict_300_right_triangle.json` |
+
+Byte-flip experiment (writing `shape_id_byte` 103 → 104 → 103 across all
+300 layers) visually confirmed in-game by user. Position writes at
+`layer + 0x18` as `struct.pack('<2f', x, -y)` also confirmed visually.
+
+**Still TODO:** pin in `tests/test_inject_multishape.py::test_shape_id_byte_per_type`
+once `GameProfile` is updated to carry the byte map (see §8 roadmap).
 
 ### Q2: Is the `/127` scale divisor correct for rectangle?
 
@@ -133,7 +169,7 @@ distinct IDs we find. Pin in
 `fh6_injector.py:1327-1331` if the current `(hw * 2) / 127.0` math is
 wrong. Pin in `tests/test_inject_multishape.py::test_rectangle_extent_convention`.
 
-### Q4: Where do triangle's 3 vertices live in memory?
+### Q4: Where do triangle's 3 vertices live in memory? **[PARTIALLY ANSWERED — H1 LIKELY, NEEDS PROOF]**
 
 **This is the hardest unknown.** The Layer struct is fixed-size and has
 no 24-byte slot for 6 floats. Hypotheses, in decreasing order of
@@ -152,7 +188,31 @@ likelihood:
   (the offsets `0x00..0x18`, `0x30..0x50`, `0x54..0x74` are all unknown
   to us today).
 
-**Method:**
+**2026-05-27 evidence (Cursor QUASAR):** Byte-flipping `shape_id_byte`
+between 103 and 104 on existing layers DOES change the rendered triangle
+type, without rewriting any other Layer field. This is strong evidence
+for **H1**: the triangle mesh is keyed by `shape_id`, and the existing
+position/scale/rotation fields drive the placement. The flip experiment
+keeps whatever size FH6 originally assigned to those layers (the layers
+were created via the FH6 vinyl editor at known sizes); it does NOT prove
+we can write a NEW triangle of arbitrary size from scratch.
+
+**Open sub-question (Q4a):** Does the `(scale_x, scale_y)` at `+0x28`
+control triangle size, the same way it controls rectangle size? If yes,
+H1 is fully confirmed and we have a working inject path. If no, FH6 uses
+a different slot for triangle scale that we haven't located.
+
+**Method (for Q4a):**
+1. Use `diagnostics/layer_shape_experiment.py` `spread` mode to write
+   different `(scale_x, scale_y)` values to triangle layers at
+   `+0x28`. Confirm visually whether triangle SIZE changes (vs just
+   position).
+2. If size changes: H1 confirmed. Divisor TBD by Q2-equivalent for
+   triangles.
+3. If size doesn't change: locate the actual size slot by scanning
+   for the known size float across the Layer struct's unread offsets.
+
+**Method (for original Q4 — locate-the-vertices, if H1 fails):**
 1. Insert a triangle in painter-fh6 with all three vertices at known,
    distinct positions (e.g., `(100,100)`, `(200,100)`, `(150,200)`).
 2. Locate the layer (use centroid `(150, 133)` for the float scan).
@@ -162,23 +222,26 @@ likelihood:
 5. If no vertex coords appear in the Layer struct, follow pointer-shaped
    u64 fields and dump their targets to find the side-table.
 
-**Acceptance:** Verified vertex storage layout, documented as an
-addendum to the offset table in §1. Pin in
-`tests/test_inject_multishape.py::test_triangle_vertex_layout`. If H1 wins
-this is straightforward; if H3 wins we may need a new inject code path.
+**Acceptance:** Either Q4a confirms H1 + a divisor for triangle scale,
+OR the original Q4 method locates the vertex storage. Either way, pin
+in `tests/test_inject_multishape.py::test_triangle_geometry_layout`.
 
-### Q5: Y-negation, rotation, color, mask — universal or ellipse-only?
+### Q5: Y-negation, rotation, color, mask — universal or ellipse-only? **[PARTIALLY ANSWERED 2026-05-27]**
 
-**Method:** Same memory-dump procedure as Q1-Q4 — for each non-ellipse
-type, inject a known shape, dump bytes at the relevant offset, confirm
-the encoding matches the ellipse convention or document the difference.
-
-| Field | Ellipse convention | Rectangle? | Triangle? |
+| Field | Ellipse convention | Rectangle? | Triangle (103/104)? |
 |---|---|---|---|
-| Position Y sign | negated `(x, -y)` | ? | ? |
+| Position Y sign | negated `(x, -y)` | ? | ✅ same — confirmed visually |
 | Rotation | `(360 - angle) % 360` | ? | ? |
 | Alpha byte | forced 255 | ? | ? |
 | Mask byte | always 0 | ? | ? |
+
+Triangle Y-negation was verified by Cursor's `layer_shape_experiment.py
+spread` mode: writing position as `struct.pack('<2f', x, -y)` placed
+triangles at the expected on-screen locations.
+
+**Still TODO** for rectangle + triangle rotation/alpha/mask: same
+memory-dump procedure as Q1, dump bytes at the relevant offset, confirm
+the encoding matches the ellipse convention or document the difference.
 
 **Acceptance:** Table above filled in with verified values. Pin in
 `tests/test_inject_multishape.py::test_field_conventions_per_type`.
@@ -304,3 +367,138 @@ for:
   `forza_abyss_painter/inject/game_profiles.py`
 - Ellipse-baseline regression test (template for the multishape test
   file): `tests/test_inject_upstream_scale_convention.py`
+
+---
+
+## 8. Roadmap — recon → injector → notebook compositions
+
+The strategic goal beyond this recon brief is shipping multi-shape
+shape-gen end-to-end: GPU generates a mix of ellipses, triangles, and
+rectangles → injector writes them all correctly → FH6 renders them →
+notebook eval pipeline enumerates compositions for quality A/B.
+
+Today every stage downstream of GPU shape-gen is bottlenecked on this
+recon. Sequence the work like this:
+
+### Stage 1 — Honest gating (P0, ~1 hr)
+
+**Goal:** stop the injector from silently writing wrong shapes.
+
+- `inject/fh6_injector.py::_score_layer` — accept `shape_id_byte ∈
+  {101, 102, 103, 104}` instead of hardcoding `{101, 102}`. Move the
+  allow-list to `GameProfile.shape_id_allowed: set[int]`.
+- `inject/game_profiles.py::FH6_PROFILE` — add `shape_id_allowed = {101,
+  102, 103, 104}` and a `shape_id_byte_for_json_type` mapping.
+- `inject/fh6_injector.py` write path — pick `shape_id_byte` from the
+  JSON `type` via the mapping, not the hardcoded `shape_id_other = 101`.
+- Triangle JSON write policy (pick one):
+  - **A. Reject** — refuse to inject any `triangle` / `rotated_rectangle`
+    JSON with a clear modal: "Triangle injection is not yet validated;
+    convert to ellipse + rectangle first or wait for full recon."
+  - **B. Experimental write** — write `shape_id_byte` 103 or 104 +
+    pos/scale/color/rotation. Result: a triangle of FH6's default size
+    appears at the right position with the right color. Geometry size
+    may NOT match the JSON's intent until Q4a is verified.
+
+  Recommend Option A until Q4a is verified — Option B's bogus geometry
+  is exactly the failure mode users would have today, just with the
+  right type instead of the wrong type.
+- `fap-validate --inject-safe` flag (optional) — strict mode that
+  ERRORs on any non-injector-safe type, for CI / pre-flight scripting.
+
+**Acceptance:** Injecting a 100-shape JSON with mixed types either
+writes them all correctly (Option B, post-Q4a) or fails fast with a
+clear message (Option A).
+
+### Stage 2 — Verify triangle scale (Q4a, ~1 session on QUASAR)
+
+**Goal:** confirm whether triangle scale lives at `+0x28` (H1) or
+elsewhere.
+
+- Use `diagnostics/layer_shape_experiment.py spread` to vary
+  `(scale_x, scale_y)` on triangle layers; observe size change.
+- If size changes: confirm H1, determine divisor (analogous to Q2 for
+  rect). Pin in regression test.
+- If size doesn't change: scan unread Layer struct offsets for size
+  floats; document layout.
+
+**Acceptance:** §3 Q4 + Q4a fully answered, pinned in
+`tests/test_inject_multishape.py::test_triangle_geometry_layout`.
+
+### Stage 3 — Real triangle injection (P1, ~1-2 sessions)
+
+**Goal:** GPU shape-gen → triangle JSON → injector writes correct-size,
+correct-color, correct-position triangles in FH6.
+
+- Update `inject/fh6_injector.py` write path: triangle scale field
+  follows the convention discovered in Stage 2.
+- Update `io/json_schema.py` triangle shape to carry the field set
+  (size, vertex-count, etc.) the injector needs.
+- Regression test: 10-shape golden inject fixture
+  (`tests/golden_inject/fixture_triangles_10.json`) + FH6 screenshot
+  comparison (manual on QUASAR initially; SSIM gate later per planning
+  doc §6).
+
+**Acceptance:** Inject 100 triangles of varying sizes/positions/colors,
+all render correctly in-game. Validator's
+`non_injector_safe_type_present` warning is removed for triangle.
+
+### Stage 4 — Notebook compositions (the unlock, multi-session)
+
+The Colab eval pipeline (`ForzaDesigner6` sister repo,
+`notebooks/build_colab_notebook.py`) currently generates ellipse-only
+output because the multi-shape eval is gated on injection. With Stage 3
+shipped, the notebook side can:
+
+- **Enumerate compositions:** mixed-shape presets where the GPU greedy
+  loop picks the best shape TYPE per position, not just the best
+  ellipse. Per planning doc §4: brute-force enumeration first, then UMAP
+  / LSH for high-shape-count pools.
+- **Algorithm-selection moat:** painter-fh6 is ellipse-only; geometrize/
+  painter has no algorithm selection. Mixed-type compositions where the
+  engine picks `triangle` for sharp edges, `ellipse` for soft gradients,
+  `rectangle` for flat regions is the competitive feature.
+- **Quality A/B vs ellipse-only:** the notebook eval already exists
+  (mixed-shape rendering ships; what's broken is the inject pipeline
+  proving the mixed output ends up correct in-game). Stage 3 closes that
+  loop.
+
+**Acceptance:** A user uploads a portrait → notebook generates a mixed
+JSON with triangles for hair edges, ellipses for skin, rectangles for
+flat backdrops → inject writes them all → in-game render is visibly
+sharper than the ellipse-only baseline at the same shape budget.
+
+### Stage 5 — Multi-shape polish + scoring (P2, blocked on #129)
+
+The GPU polish optimizer is ellipse-only today (joint_polish:`shapegen/
+gpu/joint_polish.py`). Polishing mixed-type compositions is a separate
+optimizer with per-type gradients — out of scope for the recon brief
+itself but is the next strategic bottleneck once Stage 4 ships.
+
+Also blocked: `bbox_local` scoring (production EXE path) assumes
+ellipse aspect ratios. For multi-shape, the engine must use
+`full_canvas` scoring, which requires #129 chunked `rasterize_hard`
+(per planning doc §4). #129 is the chunked-rasterize-hard work that
+unblocks K=8192 + full_canvas on consumer GPUs.
+
+### Dependency graph
+
+```
+recon (this doc)
+    │
+    ├── Stage 1 — Honest gating (P0, today)
+    │
+    └── Stage 2 — Triangle scale verification (Q4a)
+            │
+            └── Stage 3 — Real triangle injection (P1)
+                    │
+                    ├── Stage 4 — Notebook compositions (unlock!)
+                    │
+                    └── Stage 5 — Multi-shape polish + scoring (P2)
+                                       │
+                                       └── #129 chunked rasterize_hard
+                                            (separate strategic task)
+```
+
+The shortest path to user-visible value is Stage 1 → Stage 2 → Stage 3.
+Stage 4 + 5 are bigger sessions but together produce the moat.
