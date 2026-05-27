@@ -29,6 +29,10 @@ def save_json(doc: FD6Document, path: str | Path) -> Path:
 
 def load_json(path: str | Path) -> FD6Document:
     path = Path(path)
-    with open(path, "r", encoding="utf-8") as f:
+    # utf-8-sig transparently skips the UTF-8 BOM (EF BB BF) if present
+    # and is a no-op when it's absent. Notepad's default save on Windows
+    # adds a BOM; without this, hand-edited JSONs error out before
+    # reaching the schema validator. (Cursor Run 6 R6.3eA finding.)
+    with open(path, "r", encoding="utf-8-sig") as f:
         data = json.load(f)
     return FD6Document.from_dict(data)
