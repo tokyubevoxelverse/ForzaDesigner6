@@ -83,6 +83,7 @@ class GpuGenWorker(QObject):
     started = Signal(dict)        # cfg_summary (echoed config)
     progress = Signal(int, int)   # shape_count, total — fine-grained
     checkpoint = Signal(int, int) # shape_count, total — periodic
+    snapshot = Signal(int, int, str)  # shape_count, total, snapshot_path
     done = Signal(str, int)       # output_path, shape_count
     error = Signal(str, str)      # stage, message
     finished = Signal()           # always — clean termination signal
@@ -276,6 +277,12 @@ class GpuGenWorker(QObject):
             self.done.emit(
                 str(event.get("output_path", "")),
                 int(event.get("shape_count", 0)),
+            )
+        elif kind == "snapshot":
+            self.snapshot.emit(
+                int(event.get("shape_count", 0)),
+                int(event.get("total", 0)),
+                str(event.get("path", "")),
             )
         elif kind == "error":
             self.error.emit(
