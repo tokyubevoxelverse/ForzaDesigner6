@@ -186,6 +186,7 @@ class MainWindow(QMainWindow):
         self.upload.json_loaded.connect(self._on_json_loaded_for_preview)
         self.upload.reshape_requested.connect(self._on_reshape_requested)
         self.upload.polish_requested.connect(self._on_polish_requested)
+        self.upload.resume_requested.connect(self._on_resume_requested)
         self.upload.download_json_requested.connect(self._on_download_json)
         self.settings_panel.start_clicked.connect(self._start_next)
         self.settings_panel.pause_clicked.connect(self._toggle_pause)
@@ -208,6 +209,11 @@ class MainWindow(QMainWindow):
         self._current_profile: Profile | None = None
         self._last_finished_json: Path | None = None  # tracks most recent completed run for Download button
         self._loaded_json_path: Path | None = None    # JSON loaded via Upload JSON (ready to inject)
+        # Single-slot render throttle for snapshot previews dispatched via
+        # _on_gpu_snapshot. If a _RenderSnapshotJob is already in flight,
+        # remember the latest snapshot path here; QTimer drain picks it up.
+        self._snapshot_render_in_flight: bool = False
+        self._snapshot_pending_path: str | None = None
         # Cached validation issues from the last auto-validate on Upload
         # JSON. Re-shown by Tools → Validate current JSON without
         # re-reading the file. None until the first successful load.
@@ -1276,6 +1282,7 @@ class MainWindow(QMainWindow):
         self._worker.checkpoint.connect(self.preview.on_progress)
         self._worker.progress.connect(self._on_gpu_progress)
         self._worker.checkpoint.connect(self._on_gpu_progress)
+        self._worker.snapshot.connect(self._on_gpu_snapshot)
         self._worker.done.connect(self._on_gpu_done)
         self._worker.error.connect(self._on_gpu_error)
         self._worker.finished.connect(self._teardown_thread)
@@ -1537,6 +1544,162 @@ class MainWindow(QMainWindow):
         self._polish_thread.finished.connect(self._polish_thread.deleteLater)
         self.statusBar().showMessage("Polishing — running optimizer on GPU…")
         self._polish_thread.start()
+
+    # ------------------------------------------------------------------
+    # Snapshot preview wiring
+    # ------------------------------------------------------------------
+
+    def _on_gpu_snapshot(self, count: int, total: int, snapshot_path: str) -> None:
+        """Runner just wrote a snapshot; dispatch a render off-thread.
+
+        Single-slot throttle: if a render is already in flight, just
+        remember the latest path. When the in-flight job finishes, if
+        a newer path is pending, start it. Drops intermediate renders
+        if snapshots fire faster than render — for GPU at every-100,
+        this rarely matters but it bounds memory + thread churn.
+        """
+        from pathlib import Path as _Path
+        self.statusBar().showMessage(
+            f"GPU: snapshot saved at {count}/{total} → "
+            f"{_Path(snapshot_path).name}", 2000,
+        )
+        if self._snapshot_render_in_flight:
+            self._snapshot_pending_path = snapshot_path
+            return
+        self._dispatch_snapshot_render(snapshot_path)
+
+    def _dispatch_snapshot_render(self, snapshot_path: str) -> None:
+        from PySide6.QtCore import QThreadPool, QTimer
+        from forza_abyss_painter.gui.snapshot_render import _RenderSnapshotJob
+        self._snapshot_render_in_flight = True
+        job = _RenderSnapshotJob(snapshot_path, self.preview)
+        QThreadPool.globalInstance().start(job)
+        # QRunnable doesn't expose a finished signal; use a one-shot
+        # timer (3s) to clear the flag + dispatch any pending render.
+        # If a render actually takes longer, the next snapshot just
+        # adds to the pending queue with no harm.
+        QTimer.singleShot(3000, self._snapshot_render_drain)
+
+    def _snapshot_render_drain(self) -> None:
+        self._snapshot_render_in_flight = False
+        if self._snapshot_pending_path is not None:
+            pending = self._snapshot_pending_path
+            self._snapshot_pending_path = None
+            self._dispatch_snapshot_render(pending)
+
+    # ------------------------------------------------------------------
+    # Resume-from-snapshot wiring
+    # ------------------------------------------------------------------
+
+    def _on_resume_requested(self, snapshot_path: "Path") -> None:
+        """User picked a snapshot to resume from. Resolve source image,
+        open ResumeDialog, on accept spawn GpuGenWorker with the
+        dialog's values dict."""
+        from PySide6.QtWidgets import QMessageBox, QFileDialog
+        from PySide6.QtWidgets import QDialog as _QDialog
+        from pathlib import Path as _Path
+
+        # Load + sanity-check snapshot.
+        try:
+            from forza_abyss_painter.io.exporter import load_json
+            doc = load_json(str(snapshot_path))
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "Couldn't load snapshot",
+                f"Snapshot {snapshot_path.name} could not be loaded:\n\n"
+                f"{type(exc).__name__}: {exc}",
+            )
+            return
+
+        # Resolve source image (same-folder heuristic + picker).
+        sibling = _resolve_source_image_path(snapshot_path, doc.source_image)
+        if sibling is not None:
+            source = sibling
+        else:
+            QMessageBox.information(
+                self, "Source image not found",
+                f"Snapshot references '{doc.source_image}' but it's not "
+                f"next to the snapshot file. Pick it manually.",
+            )
+            picked, _ = QFileDialog.getOpenFileName(
+                self, f"Pick source image (looking for '{doc.source_image}')",
+                "", "Images (*.png *.jpg *.jpeg *.webp);;All files (*)",
+            )
+            if not picked:
+                return
+            source = _Path(picked)
+
+        # Runtime install check (resume uses the GPU runner).
+        from forza_abyss_painter.gui.runtime_install_dialog import (
+            prompt_install_or_use_existing,
+        )
+        if not prompt_install_or_use_existing(self):
+            return
+
+        # Dialog.
+        from forza_abyss_painter.gui.resume_dialog import ResumeDialog
+        dlg = ResumeDialog(
+            parent=self,
+            snapshot_path=snapshot_path,
+            source_image_path=source,
+        )
+        if dlg.exec() != _QDialog.DialogCode.Accepted:
+            return
+        values = dlg.values()
+
+        # Write the config + spawn GpuGenWorker.
+        config_path = snapshot_path.parent / (
+            f".{snapshot_path.stem}_resume_config.json"
+        )
+        try:
+            config_path.write_text(
+                json.dumps(values, indent=2),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            QMessageBox.critical(
+                self, "Couldn't start resume",
+                f"Failed to write resume config: {exc}",
+            )
+            return
+
+        from forza_abyss_painter.runtime.torch_installer import embedded_python_exe
+        py = embedded_python_exe()
+        if not py.exists():
+            QMessageBox.critical(
+                self, "GPU runtime missing",
+                f"Embedded Python not found at {py}. "
+                f"Open Tools → Generate shapes locally to install the runtime.",
+            )
+            return
+
+        # Spawn — same pattern as _start_gpu.
+        from forza_abyss_painter.gui.gpu_gen_worker import GpuGenWorker
+        from PySide6.QtCore import QThread
+        self._worker = GpuGenWorker(
+            embedded_python_exe=py,
+            config_path=config_path,
+        )
+        self._thread = QThread(self)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.progress.connect(self.preview.on_progress)
+        self._worker.checkpoint.connect(self.preview.on_progress)
+        self._worker.progress.connect(self._on_gpu_progress)
+        self._worker.checkpoint.connect(self._on_gpu_progress)
+        self._worker.snapshot.connect(self._on_gpu_snapshot)
+        self._worker.done.connect(self._on_gpu_done)
+        self._worker.error.connect(self._on_gpu_error)
+        self._worker.finished.connect(self._teardown_thread)
+        import time as _time
+        self._gpu_run_start_t = _time.monotonic()
+        self.preview.set_source(source)
+        self._thread.start()
+        self.settings_panel.set_running(True)
+        self.statusBar().showMessage(
+            f"Resume started: {snapshot_path.name} → "
+            f"continuing to {values['num_shapes']} shapes"
+        )
 
     def _on_polish_started(self, summary: dict) -> None:
         self.statusBar().showMessage("Polish started — running joint_polish on GPU…")
