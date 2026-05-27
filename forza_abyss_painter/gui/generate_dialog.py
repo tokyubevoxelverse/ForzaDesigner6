@@ -46,24 +46,28 @@ LOCAL_PRESETS: list[dict] = [
         "label": "Lineart — 400 shapes",
         "num_shapes": 400, "max_resolution": 480,
         "random_samples": 4096, "est_peak_vram_gib": 2.5,
+        "joint_polish_steps": 100,
         "description": "Logos, kanji, line art. Fast (~2 min on 30/40-series).",
     },
     {
         "label": "Headshot — 700 shapes",
         "num_shapes": 700, "max_resolution": 600,
         "random_samples": 6144, "est_peak_vram_gib": 3.5,
+        "joint_polish_steps": 150,
         "description": "Portraits. Balanced quality and speed.",
     },
     {
         "label": "Medium — 1000 shapes",
         "num_shapes": 1000, "max_resolution": 720,
         "random_samples": 8192, "est_peak_vram_gib": 5.0,
+        "joint_polish_steps": 150,
         "description": "General-purpose. Recommended default for 8+ GiB cards.",
     },
     {
         "label": "Hi-Res — 3000 shapes (FH6 closed only)",
         "num_shapes": 3000, "max_resolution": 1000,
         "random_samples": 12288, "est_peak_vram_gib": 12.0,
+        "joint_polish_steps": 250,
         "description": "Maximum detail. Needs 16+ GiB free — close FH6 first.",
     },
 ]

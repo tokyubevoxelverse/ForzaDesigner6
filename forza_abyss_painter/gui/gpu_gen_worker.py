@@ -403,6 +403,11 @@ def build_run_config(
         "checkpoint_every": max(1, int(preset["num_shapes"]) // 20),
         "lock_alpha": True,   # hard system constraint per CLAUDE.md §3
         "preset_label": str(preset.get("label", "")),
+        # Joint polish after greedy fill: N gradient/hill-climb steps
+        # over all placed shapes. CPU presets have always polished; GPU
+        # presets now match via the calibrated values in LOCAL_PRESETS.
+        # 0 = no polish (back-compat for presets / fixtures that omit it).
+        "joint_polish_steps": int(preset.get("joint_polish_steps", 0)),
         # Chunked-K mode: engine splits the K candidate batch into
         # VRAM-safe sub-batches when budget > 0. 0 = no budget = run
         # the full K in one pass (original behavior). Trade wall time
