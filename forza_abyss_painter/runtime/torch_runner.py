@@ -729,6 +729,48 @@ def run(cfg: RunConfig, stream=sys.stderr) -> int:
     if cfg.mode == "polish_only":
         return _run_polish_only(cfg, stream, logger)
 
+    # Resume support: validate seed_shapes_path BEFORE importing torch so
+    # a bad snapshot (missing file, corrupt JSON, non-ellipse shapes) fails
+    # fast without downloading/importing the GPU runtime. load_json has no
+    # torch dependency. polish_only already returned above, so this is
+    # fresh-only by construction.
+    seed_shapes: list[dict] | None = None
+    if cfg.seed_shapes_path is not None:
+        try:
+            with logger.start_phase("load_seed_shapes",
+                                    path=str(cfg.seed_shapes_path)):
+                from forza_abyss_painter.io.exporter import load_json
+                seed_doc = load_json(str(cfg.seed_shapes_path))
+                seed_shapes = list(seed_doc.shapes)
+        except (OSError, ValueError, KeyError) as exc:
+            emit(stream, {
+                "kind": "error", "stage": "load_seed_shapes",
+                "message": f"{type(exc).__name__}: {exc}",
+            })
+            return 1
+        if not seed_shapes:
+            emit(stream, {
+                "kind": "error", "stage": "resume_empty_seed",
+                "message": f"seed_shapes_path "
+                           f"{cfg.seed_shapes_path} has zero shapes",
+            })
+            return 1
+        non_ell = [s for s in seed_shapes
+                   if s.get("type") != "rotated_ellipse"]
+        if non_ell:
+            kinds = sorted({s.get("type", "?") for s in non_ell})
+            emit(stream, {
+                "kind": "error", "stage": "resume_unsupported_shape",
+                "message": (
+                    f"resume supports rotated_ellipse only; found "
+                    f"{len(non_ell)} non-ellipse shape(s) of "
+                    f"type(s) {kinds} in "
+                    f"{cfg.seed_shapes_path.name}"
+                ),
+            })
+            return 1
+        logger.log("seed_loaded", count=len(seed_shapes))
+
     # Lazy-import the engine so a bad config (caught in main()) doesn't
     # need torch to be installed first. Also lets us emit a clean
     # 'import_engine' error event if the user clicked Generate before
@@ -808,47 +850,6 @@ def run(cfg: RunConfig, stream=sys.stderr) -> int:
             "total": cfg.num_shapes,
             "path": str(snap_path),
         })
-
-    # Resume support: when seed_shapes_path is set, load the
-    # partial snapshot + pass shapes to run_gpu(seed_shapes=...).
-    # The runner branch already validated mode==fresh in
-    # from_dict, so this is fresh-only by construction.
-    seed_shapes: list[dict] | None = None
-    if cfg.seed_shapes_path is not None:
-        try:
-            with logger.start_phase("load_seed_shapes",
-                                      path=str(cfg.seed_shapes_path)):
-                from forza_abyss_painter.io.exporter import load_json
-                seed_doc = load_json(str(cfg.seed_shapes_path))
-                seed_shapes = list(seed_doc.shapes)
-        except (OSError, ValueError, KeyError) as exc:
-            emit(stream, {
-                "kind": "error", "stage": "load_seed_shapes",
-                "message": f"{type(exc).__name__}: {exc}",
-            })
-            return 1
-        if not seed_shapes:
-            emit(stream, {
-                "kind": "error", "stage": "resume_empty_seed",
-                "message": f"seed_shapes_path "
-                           f"{cfg.seed_shapes_path} has zero shapes",
-            })
-            return 1
-        non_ell = [s for s in seed_shapes
-                   if s.get("type") != "rotated_ellipse"]
-        if non_ell:
-            kinds = sorted({s.get("type", "?") for s in non_ell})
-            emit(stream, {
-                "kind": "error", "stage": "resume_unsupported_shape",
-                "message": (
-                    f"resume supports rotated_ellipse only; found "
-                    f"{len(non_ell)} non-ellipse shape(s) of "
-                    f"type(s) {kinds} in "
-                    f"{cfg.seed_shapes_path.name}"
-                ),
-            })
-            return 1
-        logger.log("seed_loaded", count=len(seed_shapes))
 
     # Drive the run.
     try:
