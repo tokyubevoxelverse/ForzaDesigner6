@@ -69,3 +69,7 @@ def test_real_field_typos_still_warn_or_error():
     errors = [i for i in issues if i.severity is Severity.ERROR]
     # The shapes are still well-formed; ERROR list should remain empty.
     assert errors == []
+    # Positive check: the typo'd key must have been flagged at INFO.
+    assert any(i.code == "unknown_top_level_field" for i in issues), (
+        "validator should emit an unknown-field issue for 'formatt' typo"
+    )
