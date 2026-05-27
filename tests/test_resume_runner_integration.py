@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 
-def _image(path: Path, h=32, w=32):
+def _image(path: Path, h=64, w=64):
     import numpy as np
     from PIL import Image
     arr = np.zeros((h, w, 3), dtype=np.uint8)
@@ -20,7 +20,7 @@ def _image(path: Path, h=32, w=32):
     Image.fromarray(arr, "RGB").save(path)
 
 
-def _snapshot(path: Path, w=32, h=32) -> dict:
+def _snapshot(path: Path, w=64, h=64) -> dict:
     shapes = [
         {"type": "rotated_ellipse", "x": 8.0, "y": 16.0, "rx": 4.0, "ry": 4.0,
          "angle": 0.0, "color": [128, 128, 128, 255]},
@@ -45,14 +45,14 @@ def test_resume_runner_appends_to_seed(tmp_path):
     _image(image)
     snap = tmp_path / "out" / "fixture_3.json"
     snap.parent.mkdir(parents=True, exist_ok=True)
-    in_doc = _snapshot(snap, w=32, h=32)
+    in_doc = _snapshot(snap, w=64, h=64)
 
     out = tmp_path / "out" / "fixture.json"
     cfg = {
         "image_path": str(image),
         "output_json_path": str(out),
         "num_shapes": 6,
-        "max_resolution": 32,
+        "max_resolution": 64,
         "random_samples": 16,
         "seed_shapes_path": str(snap),
         "checkpoint_every": 0,
@@ -87,7 +87,7 @@ def test_resume_runner_rejects_non_ellipse_seed(tmp_path):
     snap.write_text(json.dumps({
         "format": "fd6.shapes", "version": 1,
         "source_image": "img.png",
-        "image_size": [32, 32], "shape_count": 1,
+        "image_size": [64, 64], "shape_count": 1,
         "generated_at": "", "profile": "test",
         "sticker_mode": False,
         "shapes": [
@@ -102,7 +102,7 @@ def test_resume_runner_rejects_non_ellipse_seed(tmp_path):
         "image_path": str(image),
         "output_json_path": str(out),
         "num_shapes": 4,
-        "max_resolution": 32,
+        "max_resolution": 64,
         "random_samples": 16,
         "seed_shapes_path": str(snap),
         "checkpoint_every": 0,
