@@ -22,6 +22,7 @@ from forza_abyss_painter.shapegen.profile import Profile
 from forza_abyss_painter.shapegen.worker import GenerationWorker
 from forza_abyss_painter.inject.fh6_injector import patterns_are_populated, FH6_TARGET_BUILD
 from forza_abyss_painter.suite import SuiteMode, SUITE_DISPLAY, saved_suite_mode, save_suite_mode
+from forza_abyss_painter.runtime.nvidia_smi import probe_free_vram
 
 
 def _vram_preflight_verdict(
@@ -73,6 +74,52 @@ def _resolve_source_image_path(json_path: Path, source_image_name: str) -> Path 
     bare = Path(source_image_name).name   # strip any embedded path
     candidate = json_path.parent / bare
     return candidate if candidate.is_file() else None
+
+
+def _apply_autotune_to_preset(preset: dict) -> tuple[dict, str]:
+    """Apply the #131 back-prop recommendation to a GPU preset dict.
+
+    Returns a NEW dict (input is not mutated) with `max_resolution`
+    bumped to the back-prop value when bigger than the baked preset
+    value (never lower — the preset author's choice is the floor for
+    that preset). The second element is a human-readable status line
+    the caller can log to the status bar.
+
+    `probe_free_vram` is called with force=True to bypass the 5s cache
+    — the user just clicked Start, so fresh data is worth the
+    subprocess spawn cost.
+    """
+    bumped = dict(preset)   # shallow copy; preset's leaf values are scalars
+    baked_max_res = int(bumped["max_resolution"])
+    K = int(bumped.get("random_samples", 0) or 0)
+    probe = probe_free_vram(force=True)
+    if probe.available and probe.free_gib is not None and K > 0:
+        from forza_abyss_painter.shapegen.gpu.vram_planner import (
+            recommend_max_resolution,
+        )
+        recommended = recommend_max_resolution(
+            free_gib=probe.free_gib, K=K, bbox_local=True,
+        )
+        effective = max(baked_max_res, recommended)
+        bumped["max_resolution"] = effective
+        if effective > baked_max_res:
+            message = (
+                f"Auto-tuned max_res to {effective} px "
+                f"({probe.name or 'GPU'}, {probe.free_gib:.1f} GiB free)"
+            )
+        else:
+            message = (
+                f"Using baked max_res {baked_max_res} px "
+                f"({probe.free_gib:.1f} GiB free; back-prop says "
+                f"{recommended} px — using floor)"
+            )
+    else:
+        bumped["max_resolution"] = baked_max_res
+        message = (
+            f"Using baked max_res {baked_max_res} px "
+            f"(VRAM probe unavailable; using safety floor)"
+        )
+    return bumped, message
 
 
 class MainWindow(QMainWindow):
@@ -271,7 +318,6 @@ class MainWindow(QMainWindow):
             # Cheap call — cached for 5s so the status bar can refresh
             # frequently without spawning subprocesses. Falls back to
             # the plain "ready" string when nvidia-smi is unavailable.
-            from forza_abyss_painter.runtime.nvidia_smi import probe_free_vram
             probe = probe_free_vram()
             if probe.available and probe.free_gib is not None and probe.total_gib is not None:
                 vram_suffix = (
@@ -1089,7 +1135,6 @@ class MainWindow(QMainWindow):
         # footprint (canvas + refill + joint_polish). The 15× safety
         # multiplier in vram_planner is calibrated against that — if
         # peak > free, the run WILL OOM regardless of chunking.
-        from forza_abyss_painter.runtime.nvidia_smi import probe_free_vram
         probe = probe_free_vram(force=True)
         free_gib = probe.free_gib if probe.available else None
         severity, summary = _vram_preflight_verdict(peak_gib, free_gib, budget_gib)
@@ -1171,13 +1216,17 @@ class MainWindow(QMainWindow):
             )
         # Build a preset dict matching gpu_gen_worker.build_run_config()'s
         # expected fields. Source values from the SettingsPanel so what
-        # the user picked in CPU mode carries over to GPU.
-        preset = {
+        # the user picked in CPU mode carries over to GPU. Apply the
+        # #131 back-prop recommendation BEFORE handing to the runner so
+        # big-VRAM cards get the bumped max_resolution.
+        preset_baked = {
             "label": profile.name,
             "num_shapes": profile.stop_at,
             "max_resolution": profile.max_resolution,
             "random_samples": profile.random_samples,
         }
+        preset, autotune_message = _apply_autotune_to_preset(preset_baked)
+        self.statusBar().showMessage(autotune_message, 6000)
         from forza_abyss_painter.gui.gpu_gen_worker import build_run_config
         output_path = image_path.parent / image_path.stem / f"{image_path.stem}.json"
         output_path.parent.mkdir(parents=True, exist_ok=True)
