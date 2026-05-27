@@ -160,6 +160,11 @@ class ResumeDialog(QDialog):
         stem = self._snapshot_path.stem   # e.g. "ziz_2900"
         # Strip trailing _<digits>
         base_stem = re.sub(r"_\d+$", "", stem)
+        if not base_stem:
+            # Pathological case: snapshot stem was `_N` only — fall
+            # back to the original stem to avoid producing `.json`
+            # as a literal output filename.
+            base_stem = stem
         output_path = self._snapshot_path.parent / f"{base_stem}.json"
         return {
             "image_path": str(self._source_image_path),

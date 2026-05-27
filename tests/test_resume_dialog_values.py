@@ -123,4 +123,28 @@ def test_target_must_exceed_current_count(qapp, tmp_path):
 
     dlg = ResumeDialog(parent=None, snapshot_path=snap, source_image_path=src)
     assert dlg.resume_btn.isEnabled() is False
+    text = dlg.summary_label.text().lower()
+    assert "already at target" in text or "nothing to resume" in text, (
+        f"summary should explain why Resume is disabled; got {text!r}"
+    )
+    dlg.deleteLater()
+
+
+def test_underscore_n_only_stem_falls_back(qapp, tmp_path):
+    """Snapshot named `_100.json` (stem is just '_100') must not
+    produce '.json' as the output path. Fall back to the original
+    stem so the output stays a valid filename."""
+    snap = tmp_path / "_100.json"
+    _snapshot_with_config(snap, count=100, target=200)
+    src = tmp_path / "ziz.png"
+    src.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    dlg = ResumeDialog(parent=None, snapshot_path=snap, source_image_path=src)
+    values = dlg.values()
+    # Output should NOT be ".json" — should fall back to the original stem.
+    output = Path(values["output_json_path"])
+    assert output.name != ".json", (
+        f"output path is the literal hidden filename: {output}"
+    )
+    assert output.name == "_100.json" or output.name.endswith("_100.json")
     dlg.deleteLater()
