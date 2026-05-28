@@ -1055,12 +1055,12 @@ class MainWindow(QMainWindow):
         }
         budget_gib = self.settings_panel.selected_vram_budget_gib()
 
-        # Centralized 3-tier preflight + back-prop modal (Correction
-        # Task 4). The helper probes free VRAM, runs the back-prop
-        # recommendation, surfaces a "Lower to N / Cancel" modal when
-        # the baked max_res won't fit, then evaluates the block/warn/ok
-        # verdict against the (possibly lowered) effective preset.
-        proceed, preset = gpu_run_preflight(
+        # Centralized chunk-aware preflight (chunked-K Task 2). The
+        # helper probes free VRAM, asks the chunk-aware estimator for
+        # the actual runtime peak, then blocks/warns/proceeds. The
+        # preset is NEVER modified -- chunking is handled inside the
+        # engine via vram_budget_gib at scoring time.
+        proceed, info = gpu_run_preflight(
             parent=self,
             preset=preset_baked,
             budget_gib=float(budget_gib),
@@ -1072,65 +1072,22 @@ class MainWindow(QMainWindow):
                 "GPU run cancelled — VRAM preflight blocked.", 5000,
             )
             return
+        preset = preset_baked
 
-        # Construct the autotune breadcrumb the status bar appended
-        # before this refactor. We compare the effective max_resolution
-        # against the baked value to phrase it: unchanged → "Using
-        # baked max_res ...", bumped/lowered → "Effective max_res ...".
-        baked_max_res = int(preset_baked["max_resolution"])
-        effective_max_res = int(preset["max_resolution"])
-        if effective_max_res != baked_max_res:
+        # Chunk-aware breadcrumb for the "GPU generating" status-bar
+        # message. When the engine will split the K-batch into multiple
+        # scoring chunks, surface that so the user knows wall time will
+        # be ~N× longer than a single-chunk run.
+        chunks_per_shape = int(info.get("chunks_per_shape", 1))
+        peak_gib = float(info.get("peak_gib", 0.0))
+        if chunks_per_shape > 1:
             autotune_message = (
-                f"Effective max_res {effective_max_res} px "
-                f"(baked {baked_max_res} px)"
+                f"chunked into {chunks_per_shape} batches/shape "
+                f"(peak ~{peak_gib:.1f} GiB)"
             )
         else:
-            autotune_message = f"Using baked max_res {baked_max_res} px"
-
-        # Compute peak_gib from the effective preset for the chunked-K
-        # dialog below — the helper has already done this internally
-        # for its verdict, but doesn't return the number.
-        from forza_abyss_painter.shapegen.gpu.vram_planner import (
-            estimate_peak_vram_gib,
-        )
-        peak_gib = estimate_peak_vram_gib(
-            K=int(preset["random_samples"]),
-            bbox_local=True,
-            max_resolution=effective_max_res,
-        )
-
-        # Chunked-K dialog uses the effective peak_gib (#131 review BLOCKER 2).
-        chunk_warning = ""
-        if budget_gib > 0 and peak_gib > budget_gib * 0.85:
-            n_chunks = max(2, int(peak_gib / (budget_gib * 0.85)) + 1)
-            answer = QMessageBox.question(
-                self, "Chunked GPU run — longer wall-time",
-                f"<b>Your settings would need ~{peak_gib:.1f} GiB</b> at "
-                f"full-K, but your budget is <b>{budget_gib} GiB</b>.<br><br>"
-                f"To stay under budget, the engine will auto-chunk the "
-                f"candidate batch into <b>~{n_chunks} smaller chunks</b>.<br><br>"
-                f"<b>Expected:</b><br>"
-                f"  • Wall time roughly <b>{n_chunks}× longer</b> than a "
-                f"single-chunk run<br>"
-                f"  • Peak VRAM stays under {budget_gib} GiB — other apps "
-                f"(FH6, Discord) keep their GPU memory<br>"
-                f"  • Same quality output — chunking only changes "
-                f"<i>when</i> candidates are scored, not <i>what</i> "
-                f"candidates are tried<br><br>"
-                f"<b>If you want it faster instead:</b><br>"
-                f"  • Raise <b>GPU VRAM budget</b> in settings to a "
-                f"higher tier<br>"
-                f"  • Or lower <b>Random samples</b> / "
-                f"<b>Max resolution</b> for a single-chunk run<br><br>"
-                f"Proceed with chunked run?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes,   # default Yes — chunking just works
-            )
-            if answer != QMessageBox.Yes:
-                self.queue.set_status(image_path, "queued")
-                return
-            chunk_warning = (
-                f" (auto-chunked into ~{n_chunks}, wall time ~{n_chunks}×)"
+            autotune_message = (
+                f"single-chunk run (peak ~{peak_gib:.1f} GiB)"
             )
         output_path = image_path.parent / image_path.stem / f"{image_path.stem}.json"
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1184,7 +1141,7 @@ class MainWindow(QMainWindow):
         # was synchronously overwritten by this line before the event loop
         # rendered a single frame.
         self.statusBar().showMessage(
-            f"GPU generating: {image_path.name}{chunk_warning} — "
+            f"GPU generating: {image_path.name} — "
             f"{autotune_message} (live progress in preview panel)"
         )
 
@@ -1388,7 +1345,7 @@ class MainWindow(QMainWindow):
             "random_samples": 0,
             "max_resolution": _polish_w,
         }
-        proceed, _eff = gpu_run_preflight(
+        proceed, _info = gpu_run_preflight(
             parent=self,
             preset=polish_preset,
             budget_gib=float(self.settings_panel.selected_vram_budget_gib()),
@@ -1587,7 +1544,7 @@ class MainWindow(QMainWindow):
             "random_samples": int(values["random_samples"]),
             "max_resolution": int(values["max_resolution"]),
         }
-        proceed, effective = gpu_run_preflight(
+        proceed, _info = gpu_run_preflight(
             parent=self,
             preset=preset_for_preflight,
             budget_gib=float(self.settings_panel.selected_vram_budget_gib()),
@@ -1598,9 +1555,9 @@ class MainWindow(QMainWindow):
                 "Resume cancelled — VRAM preflight blocked.", 5000,
             )
             return
-        # If preflight further lowered the max_resolution, propagate
-        # the effective value into the worker config.
-        values["max_resolution"] = int(effective["max_resolution"])
+        # No effective-preset back-prop: chunked-K handles fit at scoring
+        # time inside the engine. values["max_resolution"] flows through
+        # unchanged from the ResumeDialog.
 
         # Build the worker config via build_run_config so all the
         # standard fresh-mode defaults (vram_budget_gib, bbox_local,

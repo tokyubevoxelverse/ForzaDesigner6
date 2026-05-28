@@ -55,10 +55,7 @@ def test_start_gpu_calls_preflight_and_aborts_on_block(qapp, tmp_path, monkeypat
         with patch(
             "forza_abyss_painter.gui.main_window.gpu_run_preflight",
             return_value=(False, {
-                "label": profile.name,
-                "num_shapes": profile.stop_at,
-                "random_samples": profile.random_samples,
-                "max_resolution": profile.max_resolution,
+                "peak_gib": 12.0, "chunks_per_shape": 12, "free_gib": 17.0,
             }),
         ) as preflight, patch(
             "forza_abyss_painter.gui.gpu_gen_worker.GpuGenWorker"
@@ -111,15 +108,10 @@ def test_start_gpu_proceeds_when_preflight_ok(qapp, tmp_path, monkeypatch):
     try:
         img = _make_image(tmp_path)
         profile = win.settings_panel.build_profile()
-        effective = {
-            "label": profile.name,
-            "num_shapes": profile.stop_at,
-            "random_samples": profile.random_samples,
-            "max_resolution": profile.max_resolution,
-        }
+        info = {"peak_gib": 12.0, "chunks_per_shape": 1, "free_gib": 17.0}
         with patch(
             "forza_abyss_painter.gui.main_window.gpu_run_preflight",
-            return_value=(True, effective),
+            return_value=(True, info),
         ) as preflight:
             win._start_gpu(img, profile, sticker_mode=False)
             preflight.assert_called_once()

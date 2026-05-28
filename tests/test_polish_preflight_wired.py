@@ -24,7 +24,7 @@ def test_polish_runs_preflight_and_aborts_on_block(tmp_path):
     try:
         with patch(
             "forza_abyss_painter.gui.main_window.gpu_run_preflight",
-            return_value=(False, {"random_samples": 0, "max_resolution": 720}),
+            return_value=(False, {"peak_gib": 12.0, "chunks_per_shape": 1, "free_gib": 17.0}),
         ) as preflight, patch(
             "forza_abyss_painter.gui.gpu_gen_worker.GpuGenWorker"
         ) as Worker, patch(

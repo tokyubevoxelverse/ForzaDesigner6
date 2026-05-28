@@ -57,7 +57,7 @@ def test_resume_runs_preflight_and_aborts_on_block(tmp_path):
     try:
         with patch(
             "forza_abyss_painter.gui.main_window.gpu_run_preflight",
-            return_value=(False, {"random_samples": 1000, "max_resolution": 720}),
+            return_value=(False, {"peak_gib": 12.0, "chunks_per_shape": 1, "free_gib": 17.0}),
         ) as preflight, patch(
             "forza_abyss_painter.gui.resume_dialog.ResumeDialog"
         ) as DlgCls, patch(
@@ -103,7 +103,7 @@ def test_resume_passes_seed_canvas_size_to_build_run_config(tmp_path):
     try:
         with patch(
             "forza_abyss_painter.gui.main_window.gpu_run_preflight",
-            return_value=(True, {"random_samples": 1000, "max_resolution": 720}),
+            return_value=(True, {"peak_gib": 12.0, "chunks_per_shape": 1, "free_gib": 17.0}),
         ), patch(
             "forza_abyss_painter.gui.resume_dialog.ResumeDialog"
         ) as DlgCls, patch(

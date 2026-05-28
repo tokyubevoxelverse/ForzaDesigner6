@@ -1,20 +1,20 @@
-"""Single source of truth for the GPU-spawn preflight gate.
+"""GPU-spawn preflight gate. Chunk-aware peak estimator + free-VRAM probe.
 
 Called by every path that spawns a GPU shape-gen run:
-  - main_window._start_gpu (auto-queue from drop)
+  - main_window._start_gpu
   - GenerateLocallyDialog._on_generate_clicked
   - main_window._on_polish_requested
   - main_window._on_resume_requested
 
-Three-tier verdict + back-prop with optional auto-lower:
-  1. Probe free VRAM via nvidia-smi (cached per call).
-  2. Compute recommended max_res via recommend_max_resolution.
-  3. If recommended < baked AND recommended >= safety_floor: show
-     "Lower to Y / Cancel" modal; on Lower, swap max_res; on Cancel,
-     return (False, preset).
-  4. If recommended < safety_floor: show block modal, return (False, preset).
-  5. Compute peak_gib via estimate_peak_vram_gib with effective max_res.
-  6. Verdict: peak > free -> block; peak > 0.85*free -> warn; else ok.
+Flow:
+  1. Probe free VRAM (clamped to configured budget -- user's intent).
+  2. Ask estimate_effective_peak_gib for the actual runtime peak
+     accounting for chunked-K.
+  3. Block if peak > free. Warn if peak > 0.85 * free. Otherwise proceed.
+
+NO back-prop. NO auto-lower modal. NO silent raise. The engine handles
+fit via chunked-K; this helper only catches catastrophic mismatch
+(e.g. budget set high but probed free is far lower than expected).
 """
 from __future__ import annotations
 
@@ -24,11 +24,9 @@ from typing import Any
 from PySide6.QtWidgets import QMessageBox, QWidget
 
 from forza_abyss_painter.shapegen.gpu.vram_planner import (
-    estimate_peak_vram_gib,
-    recommend_max_resolution,
+    estimate_effective_peak_gib,
 )
 
-SAFETY_FLOOR_PX = 256
 WARN_FRAC = 0.85
 
 
@@ -74,39 +72,13 @@ def _probe_free_gib(budget_gib: float) -> float:
     return float(budget_gib)
 
 
-def _recommend(K: int, free_gib: float) -> int:
-    return recommend_max_resolution(K=K, free_gib=free_gib, bbox_local=True)
-
-
-def _show_lower_modal(
-    parent: QWidget | None, *, context: str, baked: int, lowered: int,
-    free_gib: float, peak_lowered: float,
-) -> bool:
-    """Return True if user accepted the lower. False = cancel."""
-    box = QMessageBox(parent)
-    box.setIcon(QMessageBox.Icon.Warning)
-    box.setWindowTitle(f"{context} - VRAM tight")
-    box.setText(
-        f"Your preset wants max_resolution={baked} px, which needs more "
-        f"VRAM than you have free ({free_gib:.1f} GiB)."
-    )
-    box.setInformativeText(
-        f"Lower to {lowered} px (peak ~{peak_lowered:.1f} GiB)?\n\n"
-        f"Or cancel and close FH6 / free more VRAM."
-    )
-    lower_btn = box.addButton(f"Lower to {lowered} px", QMessageBox.ButtonRole.AcceptRole)
-    box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
-    box.exec()
-    return box.clickedButton() is lower_btn
-
-
 def _show_block_modal(
     parent: QWidget | None, *, context: str, summary: str, free_gib: float,
 ) -> None:
     QMessageBox.critical(
         parent,
         f"{context} - won't fit",
-        f"{summary}\n\nClose FH6 or pick a smaller preset.\n"
+        f"{summary}\n\nClose FH6 or free more VRAM.\n"
         f"Free VRAM: {free_gib:.1f} GiB",
     )
 
@@ -132,62 +104,39 @@ def gpu_run_preflight(
     budget_gib: float,
     context: str,
 ) -> tuple[bool, dict[str, Any]]:
-    """See module docstring for flow.
+    """Return (proceed_ok, info) where info has 'peak_gib', 'chunks_per_shape',
+    'free_gib' keys. Caller uses info for status-bar messaging.
+
+    Caller must NOT spawn worker if proceed_ok is False. The preset is
+    NOT modified -- chunking is handled inside the engine, not here.
 
     Args:
       parent: QWidget for modal parenting (None ok in headless tests).
       preset: must contain 'random_samples' and 'max_resolution'.
       budget_gib: card's total VRAM budget (typically settings.gpu_budget_gib).
-      context: human label for modals ("Generate locally", "Re-shape-gen",
-        "Polish loaded JSON", "Resume from snapshot").
-
-    Returns: (proceed_ok, effective_preset). Caller must NOT spawn worker
-    if proceed_ok is False. effective_preset may have a lowered max_resolution.
+      context: human label for modals ("Generate locally", "Generate from
+        drop", "Polish loaded JSON", "Resume from snapshot").
     """
     K = int(preset["random_samples"])
-    baked = int(preset["max_resolution"])
-    effective = dict(preset)
+    max_resolution = int(preset["max_resolution"])
 
     free_gib = _probe_free_gib(budget_gib)
-    recommended = _recommend(K=K, free_gib=free_gib)
-
-    if recommended < baked:
-        if recommended < SAFETY_FLOOR_PX:
-            summary = (
-                f"Free VRAM {free_gib:.1f} GiB can only fit ~{recommended} px, "
-                f"below the {SAFETY_FLOOR_PX} px floor."
-            )
-            _show_block_modal(parent, context=context, summary=summary, free_gib=free_gib)
-            return False, effective
-
-        peak_lowered = estimate_peak_vram_gib(
-            K=K, bbox_local=True, max_resolution=recommended,
-        )
-        ok = _show_lower_modal(
-            parent, context=context, baked=baked, lowered=recommended,
-            free_gib=free_gib, peak_lowered=peak_lowered,
-        )
-        if not ok:
-            return False, effective
-        effective["max_resolution"] = recommended
-        # Trust the lower-modal acceptance: recommend_max_resolution
-        # already picked a value that fits in free VRAM by its own
-        # contract. No second verdict needed.
-        return True, effective
-
-    elif recommended > baked:
-        # Raise silently on big-VRAM cards; UI shows the autotune message via status bar.
-        effective["max_resolution"] = recommended
-
-    peak_gib = estimate_peak_vram_gib(
-        K=K, bbox_local=True, max_resolution=int(effective["max_resolution"]),
+    peak_gib, chunks_per_shape = estimate_effective_peak_gib(
+        K=K, max_resolution=max_resolution, budget_gib=budget_gib,
     )
+
+    info = {
+        "peak_gib": peak_gib,
+        "chunks_per_shape": chunks_per_shape,
+        "free_gib": free_gib,
+    }
+
     outcome = _decide(peak_gib=peak_gib, free_gib=free_gib, budget_gib=budget_gib)
 
     if outcome.verdict == "block":
         _show_block_modal(parent, context=context, summary=outcome.summary, free_gib=free_gib)
-        return False, effective
+        return False, info
     if outcome.verdict == "warn":
         ok = _show_warn_modal(parent, context=context, summary=outcome.summary)
-        return ok, effective
-    return True, effective
+        return ok, info
+    return True, info

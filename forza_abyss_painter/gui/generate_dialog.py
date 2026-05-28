@@ -101,10 +101,6 @@ class GenerateLocallyDialog(QDialog):
         # tight the card is. Default 24.0 keeps headless tests working;
         # the real call site in main_window overrides it.
         self._gpu_budget_gib: float = float(gpu_budget_gib)
-        # Effective max_resolution override — set by _on_generate_clicked
-        # AFTER preflight returns with a lowered value. .values() returns
-        # this when set so build_run_config sees the right number.
-        self._effective_max_resolution: int | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 16, 20, 16)
@@ -343,16 +339,16 @@ class GenerateLocallyDialog(QDialog):
         self.vram_info.setTextFormat(Qt.RichText)
 
     def values(self) -> dict:
-        """Return the effective preset dict for the currently selected
-        item. Honors any `_effective_max_resolution` override set by the
-        preflight gate (lower-and-confirm path)."""
+        """Return the preset dict for the currently selected item.
+
+        Chunked-K handles VRAM fit at scoring time inside the engine, so
+        the preflight gate never modifies the preset and .values() flows
+        through unchanged.
+        """
         preset = self.preset_combo.currentData()
         if preset is None:
             return {}
-        out = dict(preset)
-        if self._effective_max_resolution is not None:
-            out["max_resolution"] = int(self._effective_max_resolution)
-        return out
+        return dict(preset)
 
     def _on_generate_clicked(self) -> None:
         """Lock the form, spawn the GPU subprocess via GpuGenWorker on a
@@ -364,14 +360,13 @@ class GenerateLocallyDialog(QDialog):
         """
         if not self.source_path:
             return
-        # Centralized 3-tier preflight + back-prop modal (Correction
-        # Task 5). Closes the bypass: before this wire-up the dialog
-        # spawned the worker directly without a VRAM check. Now we
-        # gate on the helper's verdict — block returns early, lower
-        # path stashes the effective max_resolution into the override
-        # so .values() / build_run_config see it.
+        # Centralized chunk-aware preflight (chunked-K Task 2). The
+        # helper probes free VRAM, asks the chunk-aware estimator for
+        # the actual runtime peak, then blocks/warns/proceeds. The
+        # preset is NEVER modified -- chunking handles fit inside the
+        # engine at scoring time, so .values() flows through unchanged.
         preset_baked = self.preset_combo.currentData()
-        proceed, effective_preset = gpu_run_preflight(
+        proceed, _info = gpu_run_preflight(
             parent=self,
             preset=preset_baked,
             budget_gib=float(self._gpu_budget_gib),
@@ -379,10 +374,6 @@ class GenerateLocallyDialog(QDialog):
         )
         if not proceed:
             return
-        # Stash the effective max_resolution so subsequent .values() calls
-        # (and the build_run_config below) reflect the lowered/autotuned
-        # value — never the baked one when they differ.
-        self._effective_max_resolution = int(effective_preset["max_resolution"])
         preset = self.values()
         out_path = self._resolve_output_path(preset)
 
