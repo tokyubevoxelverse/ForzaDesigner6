@@ -35,7 +35,7 @@ from forza_abyss_painter.gui.gpu_preflight import gpu_run_preflight
 from forza_abyss_painter.runtime.nvidia_smi import probe_free_vram
 from forza_abyss_painter.runtime.torch_installer import embedded_python_exe
 from forza_abyss_painter.shapegen.gpu.vram_planner import (
-    estimate_peak_vram_gib,
+    estimate_effective_peak_gib,
     recommend_max_resolution,
 )
 
@@ -137,16 +137,24 @@ class GenerateLocallyDialog(QDialog):
         src_wrap.setLayout(src_row)
         form.addRow("Source image:", src_wrap)
 
-        # Preset dropdown.
+        # Preset dropdown. Combo items show the chunk-aware effective
+        # peak (the per-chunk allocation at scoring time) rather than the
+        # unchunked full-K number, which can be misleadingly large on a
+        # tight budget. See vram_planner.estimate_effective_peak_gib.
         self.preset_combo = QComboBox(self)
         for p in LOCAL_PRESETS:
-            live_peak = estimate_peak_vram_gib(
+            live_peak, live_chunks = estimate_effective_peak_gib(
                 K=int(p["random_samples"]),
-                bbox_local=True,
                 max_resolution=int(p["max_resolution"]),
+                budget_gib=float(self._gpu_budget_gib),
+            )
+            suffix = (
+                f"(~{live_peak:.0f} GiB peak, {live_chunks} batches)"
+                if live_chunks > 1
+                else f"(~{live_peak:.0f} GiB peak)"
             )
             self.preset_combo.addItem(
-                f"{p['label']}  (~{live_peak:.0f} GiB peak)",
+                f"{p['label']}  {suffix}",
                 userData=p,
             )
         self.preset_combo.currentIndexChanged.connect(self._on_preset_changed)
@@ -292,10 +300,15 @@ class GenerateLocallyDialog(QDialog):
         preset.setdefault("baked_max_resolution", baked_max_res)
         preset["max_resolution"] = effective_max_res
 
-        live_peak = estimate_peak_vram_gib(
+        live_peak, live_chunks = estimate_effective_peak_gib(
             K=int(preset["random_samples"]),
-            bbox_local=True,
             max_resolution=int(preset["max_resolution"]),
+            budget_gib=float(self._gpu_budget_gib),
+        )
+        chunk_clause = (
+            f"chunked into {live_chunks} batches/shape"
+            if live_chunks > 1
+            else "no chunking needed"
         )
         self.preset_desc.setText(
             f"<b>{preset['label']}</b><br>"
@@ -303,7 +316,8 @@ class GenerateLocallyDialog(QDialog):
             f"<b>Settings:</b> "
             f"max_resolution={preset['max_resolution']}, "
             f"random_samples={preset['random_samples']}, "
-            f"estimated peak VRAM: ~{live_peak:.0f} GiB (full pipeline)"
+            f"estimated peak VRAM: ~{live_peak:.0f} GiB "
+            f"({chunk_clause})"
             f"{rec_line}"
         )
         self.preset_desc.setTextFormat(Qt.RichText)
@@ -315,26 +329,30 @@ class GenerateLocallyDialog(QDialog):
             self.output_field.setPlaceholderText(str(suggested))
 
     def _refresh_vram_estimate(self) -> None:
-        """Probe free VRAM via the runtime (if installed) and compare to the
-        preset's estimated peak. Surface a clear OK/tight/risky label."""
+        """Surface the chunk-aware peak VRAM that will actually allocate
+        at the user's configured budget. When chunking engages, this is
+        the per-chunk peak (e.g. ~12 GiB on a 17 GiB budget with Hi-Res
+        3000) rather than the misleading unchunked full-K number.
+
+        Single source of truth: vram_planner.estimate_effective_peak_gib.
+        """
         preset = self.preset_combo.currentData()
         if not preset:
             self.vram_info.setText("")
             return
-        # Phase 2: VRAM probe needs the installed runtime to import torch.
-        # Phase 3 will subprocess-call torch_runner to do the probe. For
-        # now show the live K-only peak estimate, with a generic
-        # recommendation.
-        est = estimate_peak_vram_gib(
+        peak, chunks = estimate_effective_peak_gib(
             K=int(preset["random_samples"]),
-            bbox_local=True,
             max_resolution=int(preset["max_resolution"]),
+            budget_gib=float(self._gpu_budget_gib),
+        )
+        chunk_clause = (
+            f"chunked into {chunks} batches/shape"
+            if chunks > 1
+            else "no chunking needed"
         )
         self.vram_info.setText(
-            f"Estimated peak VRAM: <b>~{est:.0f} GiB</b> (peak). "
-            f"Make sure your card has at least that much FREE (close FH6 + "
-            f"other GPU apps if tight). Phase 3 will probe your card "
-            f"directly and warn before launch."
+            f"Estimated peak VRAM: <b>~{peak:.1f} GiB</b> "
+            f"({chunk_clause}). Budget: {self._gpu_budget_gib:.0f} GiB."
         )
         self.vram_info.setTextFormat(Qt.RichText)
 

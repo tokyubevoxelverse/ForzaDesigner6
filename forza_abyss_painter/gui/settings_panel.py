@@ -318,22 +318,27 @@ class SettingsPanel(QWidget):
         return int(data) if data is not None else 0
 
     def estimate_peak_vram_gib(self, profile) -> float:
-        """Single source of truth in `vram_planner.estimate_peak_vram_gib`
-        (K-only formula calibrated against Run 4 measurement).
+        """Return the chunk-aware EFFECTIVE peak that will actually be
+        allocated on the GPU at the user's selected VRAM budget.
 
-        Always passes bbox_local=True because the EXE shape-gen runs
-        ellipse-only + gradient mode (the production preset). If we
-        ever ship presets with bbox_local=False, this needs to thread
-        the flag through.
+        Single source of truth: `vram_planner.estimate_effective_peak_gib`.
+        When chunking engages, this is the per-chunk peak (what the
+        engine actually allocates at scoring time), not the unchunked
+        full-K number. Method name is preserved for caller compatibility;
+        semantics align with what runs on the card.
+
+        Always assumes bbox_local=True (production EXE path; chunking
+        only applies to bbox_local scoring).
         """
         from forza_abyss_painter.shapegen.gpu.vram_planner import (
-            estimate_peak_vram_gib,
+            estimate_effective_peak_gib,
         )
-        return estimate_peak_vram_gib(
+        peak, _chunks = estimate_effective_peak_gib(
             K=max(1, int(profile.random_samples)),
-            bbox_local=True,
             max_resolution=max(64, int(profile.max_resolution)),
+            budget_gib=float(self.selected_vram_budget_gib()),
         )
+        return peak
 
     def selected_backend(self) -> str:
         """Return 'cpu' or 'gpu' — which shape-gen backend the user
