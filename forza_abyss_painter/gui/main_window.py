@@ -1154,9 +1154,9 @@ class MainWindow(QMainWindow):
         # "set budget, let it cook" — but now the guard sees the real
         # post-autotune estimate, not the pre-autotune baked value.
         from forza_abyss_painter.shapegen.gpu.vram_planner import (
-            estimate_peak_vram_gib,
+            estimate_full_pipeline_gib,
         )
-        peak_gib = estimate_peak_vram_gib(
+        peak_gib = estimate_full_pipeline_gib(
             K=int(preset["random_samples"]),
             bbox_local=True,
             max_resolution=int(preset["max_resolution"]),
