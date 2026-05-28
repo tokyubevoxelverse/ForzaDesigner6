@@ -591,10 +591,18 @@ def _run_polish_only(cfg: RunConfig, stream, logger) -> int:
             logger.log("joint_polish_done", refined_count=len(refined))
     except RuntimeError as exc:
         # joint_polish + OOM are converted to RuntimeError upstream;
-        # surface verbatim like the fresh path.
+        # surface verbatim like the fresh path, and append restart
+        # guidance — polish_only also runs on GPU and can OOM on a
+        # fragmented cache after a prior fresh-gen failure.
         emit(stream, {
             "kind": "error", "stage": "joint_polish",
-            "message": f"{type(exc).__name__}: {exc}",
+            "message": (
+                f"{type(exc).__name__}: {exc}\n\n"
+                f"If this is a CUDA OOM, the GPU's cache may still hold "
+                f"the failed allocation. Close FH6 if running, restart "
+                f"the EXE to release the CUDA context, and try a "
+                f"smaller preset (e.g. Medium 1000 instead of Hi-Res 3000)."
+            ),
         })
         return 1
     except Exception as exc:  # pragma: no cover — defensive
@@ -872,11 +880,19 @@ def run(cfg: RunConfig, stream=sys.stderr) -> int:
     except RuntimeError as exc:
         # run_gpu's OOM wrapper converts torch.cuda.OutOfMemoryError into
         # a RuntimeError with an actionable recipe — pass that through
-        # unchanged so the EXE's modal can show the user the exact knob
-        # values to lower.
+        # AND append restart guidance so users know how to recover.
+        # After an OOM the CUDA cache may still hold the failed
+        # allocation; subsequent runs hit the same OOM until the EXE
+        # restarts.
         emit(stream, {
             "kind": "error", "stage": "engine_run",
-            "message": f"{type(exc).__name__}: {exc}",
+            "message": (
+                f"{type(exc).__name__}: {exc}\n\n"
+                f"If this is a CUDA OOM, the GPU's cache may still hold "
+                f"the failed allocation. Close FH6 if running, restart "
+                f"the EXE to release the CUDA context, and try a "
+                f"smaller preset (e.g. Medium 1000 instead of Hi-Res 3000)."
+            ),
         })
         return 1
     except Exception as exc:  # pragma: no cover — broad catch for IPC safety
