@@ -133,6 +133,12 @@ def test_resume_slot_handles_snapshot(qapp, tmp_path, monkeypatch):
     monkeypatch.setattr(mw_mod, "_resolve_source_image_path",
                          lambda json_path, name: src)
 
+    # Bypass VRAM preflight gate (correction Task 9). Without this the
+    # resume slot would invoke gpu_run_preflight, which queries nvidia-smi
+    # — unavailable on the test box, blocking the run via modal.
+    monkeypatch.setattr(mw_mod, "gpu_run_preflight",
+                         lambda **kwargs: (True, dict(kwargs["preset"])))
+
     win = MainWindow()
     try:
         win._on_resume_requested(snap)

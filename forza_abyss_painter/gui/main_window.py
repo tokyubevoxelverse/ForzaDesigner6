@@ -12,6 +12,9 @@ from PySide6.QtWidgets import (
 from forza_abyss_painter.gui.ac_settings_panel import ACSettingsPanel
 from forza_abyss_painter.gui.brand_banner import BrandBanner, badge_path
 from forza_abyss_painter.gui.game_suite_dialog import GameSuiteDialog
+from forza_abyss_painter.gui.gpu_gen_worker import (
+    GpuGenWorker, build_polish_config, build_run_config,
+)
 from forza_abyss_painter.gui.gpu_preflight import gpu_run_preflight
 from forza_abyss_painter.gui.preview_panel import PreviewPanel
 from forza_abyss_painter.gui.texture_preview_panel import TexturePreviewPanel
@@ -1129,7 +1132,6 @@ class MainWindow(QMainWindow):
             chunk_warning = (
                 f" (auto-chunked into ~{n_chunks}, wall time ~{n_chunks}×)"
             )
-        from forza_abyss_painter.gui.gpu_gen_worker import build_run_config
         output_path = image_path.parent / image_path.stem / f"{image_path.stem}.json"
         output_path.parent.mkdir(parents=True, exist_ok=True)
         config = build_run_config(image_path, output_path, preset,
@@ -1364,15 +1366,40 @@ class MainWindow(QMainWindow):
         if source is None:
             return
         from forza_abyss_painter.gui.polish_dialog import PolishDialog
-        from forza_abyss_painter.gui.gpu_gen_worker import (
-            GpuGenWorker, build_polish_config,
-        )
         from forza_abyss_painter.gui.runtime_install_dialog import (
             prompt_install_or_use_existing,
         )
         from forza_abyss_painter.runtime.torch_installer import embedded_python_exe
         if not prompt_install_or_use_existing(self):
             return
+
+        # Preflight (VRAM honesty correction Task 9). Polish does NOT
+        # use random_samples (K), so the synthetic preset uses K=0 —
+        # the only VRAM driver is the canvas size, which we read off
+        # the loaded JSON's image_size. If the user's budget can't fit
+        # the canvas, the helper blocks and we abort cleanly.
+        from forza_abyss_painter.io.exporter import load_json as _load_json
+        try:
+            _polish_doc = _load_json(str(json_path))
+            _polish_w = int(_polish_doc.image_size[0]) if _polish_doc.image_size else 1200
+        except Exception:
+            _polish_w = 1200
+        polish_preset = {
+            "random_samples": 0,
+            "max_resolution": _polish_w,
+        }
+        proceed, _eff = gpu_run_preflight(
+            parent=self,
+            preset=polish_preset,
+            budget_gib=float(self.settings_panel.selected_vram_budget_gib()),
+            context="Polish loaded JSON",
+        )
+        if not proceed:
+            self.statusBar().showMessage(
+                "Polish cancelled — VRAM preflight blocked.", 5000,
+            )
+            return
+
         dlg = PolishDialog(self,
                             loaded_json_path=json_path,
                             source_image_path=source)
@@ -1413,8 +1440,13 @@ class MainWindow(QMainWindow):
             return
 
         # Spawn the worker on a QThread — same pattern GenerateLocallyDialog uses.
+        # Re-import locally so monkeypatch.setattr on the source module
+        # reaches this site.
+        from forza_abyss_painter.gui.gpu_gen_worker import (
+            GpuGenWorker as _GpuGenWorker,
+        )
         self._polish_thread = QThread(self)
-        self._polish_worker = GpuGenWorker(
+        self._polish_worker = _GpuGenWorker(
             embedded_python_exe=py,
             config_path=config_path,
         )
@@ -1547,13 +1579,65 @@ class MainWindow(QMainWindow):
             return
         values = dlg.values()
 
-        # Write the config + spawn GpuGenWorker.
+        # Preflight (VRAM honesty correction Task 9). Use the dialog's
+        # chosen max_resolution (which the ResumeDialog may have already
+        # lowered via Task 8 mismatch detection) and the resume K so
+        # the gate evaluates the actual peak VRAM at run time.
+        preset_for_preflight = {
+            "random_samples": int(values["random_samples"]),
+            "max_resolution": int(values["max_resolution"]),
+        }
+        proceed, effective = gpu_run_preflight(
+            parent=self,
+            preset=preset_for_preflight,
+            budget_gib=float(self.settings_panel.selected_vram_budget_gib()),
+            context="Resume from snapshot",
+        )
+        if not proceed:
+            self.statusBar().showMessage(
+                "Resume cancelled — VRAM preflight blocked.", 5000,
+            )
+            return
+        # If preflight further lowered the max_resolution, propagate
+        # the effective value into the worker config.
+        values["max_resolution"] = int(effective["max_resolution"])
+
+        # Build the worker config via build_run_config so all the
+        # standard fresh-mode defaults (vram_budget_gib, bbox_local,
+        # checkpoint_every floor) are populated uniformly. Then layer
+        # the resume-specific fields (mode, seed_shapes_path, joint
+        # polish steps, device, lock_alpha override, polish-friendly
+        # output path) on top — those are NOT produced by
+        # build_run_config but ARE required by RunConfig.from_dict
+        # for a resume run.
+        synthetic_preset = {
+            "num_shapes": int(values["num_shapes"]),
+            "max_resolution": int(values["max_resolution"]),
+            "random_samples": int(values["random_samples"]),
+            "label": str(values.get("preset_label", "resumed")),
+            "joint_polish_steps": int(values.get("joint_polish_steps", 0)),
+        }
+        config = build_run_config(
+            image_path=Path(values["image_path"]),
+            output_json_path=Path(values["output_json_path"]),
+            preset=synthetic_preset,
+            sticker_mode=bool(values.get("sticker_mode", False)),
+            vram_budget_gib=float(self.settings_panel.selected_vram_budget_gib()),
+            checkpoint_every=int(values.get("checkpoint_every", 100)),
+            seed_canvas_size=values.get("seed_canvas_size"),
+        )
+        # Resume-specific overrides not covered by build_run_config.
+        config["mode"] = str(values.get("mode", "fresh"))
+        config["seed_shapes_path"] = str(values["seed_shapes_path"])
+        config["lock_alpha"] = bool(values.get("lock_alpha", True))
+        config["bbox_local"] = bool(values.get("bbox_local", True))
+
         config_path = snapshot_path.parent / (
             f".{snapshot_path.stem}_resume_config.json"
         )
         try:
             config_path.write_text(
-                json.dumps(values, indent=2),
+                json.dumps(config, indent=2),
                 encoding="utf-8",
             )
         except OSError as exc:
@@ -1573,10 +1657,13 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # Spawn — same pattern as _start_gpu.
-        from forza_abyss_painter.gui.gpu_gen_worker import GpuGenWorker
+        # Spawn — same pattern as _start_gpu. Re-import locally so
+        # monkeypatch.setattr on the source module reaches this site.
         from PySide6.QtCore import QThread
-        self._worker = GpuGenWorker(
+        from forza_abyss_painter.gui.gpu_gen_worker import (
+            GpuGenWorker as _GpuGenWorker,
+        )
+        self._worker = _GpuGenWorker(
             embedded_python_exe=py,
             config_path=config_path,
         )
