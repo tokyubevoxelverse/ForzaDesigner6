@@ -156,6 +156,17 @@ class RunConfig:
     # is fresh-only).
     seed_shapes_path: Path | None = None
 
+    # --- Resume rescale support (#vram-honesty Task 6/7) ---------------
+    # (width, height) of the canvas the seed_shapes_path doc was
+    # generated on. When the resume run picks a SMALLER canvas (because
+    # the user dropped max_resolution to fit headroom), engine.run_gpu
+    # rescales the seeded coords from this size to the current canvas
+    # before continuing. None = no rescale (snapshot ran at the same
+    # canvas dims as the current run, or no resume at all).
+    # JSON-roundtrip-safe: serializes to list, coerced back to tuple in
+    # from_dict.
+    seed_canvas_size: tuple[int, int] | None = None
+
     @classmethod
     def from_dict(cls, d: dict) -> "RunConfig":
         """Parse + validate. Raises ValueError on missing required fields,
@@ -250,6 +261,34 @@ class RunConfig:
         else:
             seed_shapes_path = None
 
+        # seed_canvas_size: optional (w, h) tuple recording the canvas
+        # dims of the seed_shapes_path doc. engine.run_gpu rescales
+        # seeded coords when this differs from the current canvas. JSON
+        # roundtrips tuples as lists, so coerce. Validate shape + types
+        # so a malformed value never reaches the engine.
+        scs = d.get("seed_canvas_size")
+        if scs is None:
+            seed_canvas_size = None
+        else:
+            if not isinstance(scs, (list, tuple)) or len(scs) != 2:
+                raise ValueError(
+                    f"seed_canvas_size must be a (width, height) "
+                    f"pair, got {scs!r}"
+                )
+            try:
+                sw, sh = int(scs[0]), int(scs[1])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"seed_canvas_size entries must be int-coercible, "
+                    f"got {scs!r}"
+                ) from exc
+            if sw < 1 or sh < 1:
+                raise ValueError(
+                    f"seed_canvas_size dims must be >= 1, got "
+                    f"({sw}, {sh})"
+                )
+            seed_canvas_size = (sw, sh)
+
         # Optional with type coercion (same across modes).
         lock_alpha = bool(d.get("lock_alpha", True))
         if not lock_alpha:
@@ -289,6 +328,7 @@ class RunConfig:
             input_shapes_path=input_shapes_path,
             polish_steps_override=polish_steps_override,
             seed_shapes_path=seed_shapes_path,
+            seed_canvas_size=seed_canvas_size,
         )
 
     def summary(self) -> dict:
@@ -875,6 +915,7 @@ def run(cfg: RunConfig, stream=sys.stderr) -> int:
                 checkpoint_cb=_checkpoint_cb if cfg.checkpoint_every > 0 else None,
                 checkpoint_every=cfg.checkpoint_every,
                 seed_shapes=seed_shapes,
+                seed_canvas_size=cfg.seed_canvas_size,
             )
             logger.log("run_gpu_done", shapes_count=len(shapes_list))
     except RuntimeError as exc:

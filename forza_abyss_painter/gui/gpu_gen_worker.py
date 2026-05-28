@@ -387,6 +387,7 @@ def build_run_config(
     sticker_mode: bool = False,
     vram_budget_gib: float = 0.0,
     checkpoint_every: int | None = None,
+    seed_canvas_size: tuple[int, int] | None = None,
 ) -> dict:
     """Map a Generate dialog preset entry → torch_runner RunConfig dict.
 
@@ -408,6 +409,17 @@ def build_run_config(
         ce = max(100, int(preset["num_shapes"]) // 20)
     else:
         ce = int(checkpoint_every)
+    # seed_canvas_size: optional (w, h) from a snapshot's image_size,
+    # populated by ResumeDialog when it detects the user lowered the
+    # canvas dims relative to the seed. None preserves identical
+    # behavior for all existing call sites (fresh, polish, resume-at-
+    # same-size). RunConfig.from_dict coerces list -> tuple post-JSON.
+    if seed_canvas_size is None:
+        seed_canvas_size_field: tuple[int, int] | None = None
+    else:
+        seed_canvas_size_field = (
+            int(seed_canvas_size[0]), int(seed_canvas_size[1]),
+        )
     return {
         "image_path": str(image_path),
         "output_json_path": str(output_json_path),
@@ -438,6 +450,9 @@ def build_run_config(
         # that OOMs full_canvas at 47.5 GiB. Until strategy-B chunked
         # rasterize lands (#129), this is the only safe path.
         "bbox_local": True,
+        # Resume rescale (#vram-honesty Task 7). Populated by ResumeDialog
+        # only; None for fresh / polish / same-size-resume runs.
+        "seed_canvas_size": seed_canvas_size_field,
     }
 
 
