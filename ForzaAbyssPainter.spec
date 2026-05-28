@@ -29,9 +29,22 @@ hiddenimports = [
     "forza_abyss_painter.gui.texture_preview_panel",
     "forza_abyss_painter.gui.inject_worker",
     "forza_abyss_painter.gui.inject_dialog",
+    "forza_abyss_painter.gui.inject_template_picker",
     "forza_abyss_painter.gui.splash",
     "forza_abyss_painter.gui.brand_banner",
     "forza_abyss_painter.gui.themes",
+    # Function-local imports in main_window.py — PyInstaller's static
+    # analysis misses these. Belt-and-suspenders entries so the EXE
+    # can resolve every code path the GUI can reach.
+    "forza_abyss_painter.gui.snapshot_render",
+    "forza_abyss_painter.gui.feature_flags",
+    "forza_abyss_painter.gui.gpu_first_launch",
+    "forza_abyss_painter.gui.runtime_install_dialog",
+    "forza_abyss_painter.gui.generate_dialog",
+    "forza_abyss_painter.gui.polish_dialog",
+    "forza_abyss_painter.gui.resume_dialog",
+    "forza_abyss_painter.gui.clean_dialog",
+    "forza_abyss_painter.gui.validation_dialog",
     "forza_abyss_painter.inject.cli",
     "forza_abyss_painter.inject.discovery",
     "forza_abyss_painter.inject.patterns_io",

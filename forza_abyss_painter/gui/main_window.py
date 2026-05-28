@@ -21,6 +21,7 @@ from forza_abyss_painter.gui.texture_preview_panel import TexturePreviewPanel
 from forza_abyss_painter.gui.themes import THEMES, apply_theme, saved_theme_name, badge_filename_for_theme
 from forza_abyss_painter.gui.queue_panel import QueuePanel
 from forza_abyss_painter.gui.settings_panel import SettingsPanel
+from forza_abyss_painter.gui.snapshot_render import _RenderSnapshotJob
 from forza_abyss_painter.gui.upload_panel import UploadPanel
 from forza_abyss_painter.shapegen.profile import Profile
 from forza_abyss_painter.shapegen.worker import GenerationWorker
@@ -1458,9 +1459,15 @@ class MainWindow(QMainWindow):
 
     def _dispatch_snapshot_render(self, snapshot_path: str) -> None:
         from PySide6.QtCore import QThreadPool, QTimer
-        from forza_abyss_painter.gui.snapshot_render import _RenderSnapshotJob
         self._snapshot_render_in_flight = True
         job = _RenderSnapshotJob(snapshot_path, self.preview)
+        # Surface render failures in the status bar — without this the
+        # render path is invisible to users when it breaks (the EXE
+        # cannot tail stderr). 6s message timeout matches other
+        # transient diagnostics in MainWindow.
+        job.emitter.render_failed.connect(
+            lambda msg: self.statusBar().showMessage(msg, 6000)
+        )
         QThreadPool.globalInstance().start(job)
         # QRunnable doesn't expose a finished signal; use a one-shot
         # timer (3s) to clear the flag + dispatch any pending render.

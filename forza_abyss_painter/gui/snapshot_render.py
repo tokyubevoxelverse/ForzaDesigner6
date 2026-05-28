@@ -30,9 +30,15 @@ class _CanvasEmitter(QObject):
     Lives on the same thread as the QRunnable body; the Signal's
     queued-connection semantics deliver the canvas to the GUI thread
     automatically when the connected slot belongs to a different thread.
+
+    `render_failed` carries a short human-readable error summary that
+    MainWindow surfaces in the status bar — without this users have no
+    way to see why the preview isn't updating (stderr is invisible in
+    the windowed EXE build).
     """
 
     canvas_ready = Signal(object)
+    render_failed = Signal(str)
 
 
 class _RenderSnapshotJob(QRunnable):
@@ -52,10 +58,14 @@ class _RenderSnapshotJob(QRunnable):
                  preview: "PreviewPanel") -> None:
         super().__init__()
         self._path = Path(snapshot_path)
-        self._emitter = _CanvasEmitter()
+        # Public attribute (kept `_emitter` alias for back-compat with
+        # any existing connections). MainWindow connects render_failed
+        # via `job.emitter.render_failed`.
+        self.emitter = _CanvasEmitter()
+        self._emitter = self.emitter
         # connect(preview.on_preview) uses AutoConnection: Direct when
         # same-thread (tests), Queued when cross-thread (QThreadPool).
-        self._emitter.canvas_ready.connect(preview.on_preview)
+        self.emitter.canvas_ready.connect(preview.on_preview)
 
     def run(self) -> None:   # noqa: D401 — QRunnable contract
         try:
@@ -72,10 +82,19 @@ class _RenderSnapshotJob(QRunnable):
                 background=(255, 255, 255),
                 transparent_bg=transparent_bg,
             )
-        except Exception:
-            # Best-effort: silently skip this render; the next snapshot
-            # fires soon. Log to stderr for diagnostics; not via logger
-            # to avoid pulling Qt-thread loggers into the worker.
+        except Exception as exc:
+            # Best-effort: surface the failure so the user can see it
+            # in the status bar (the EXE build can't tail stderr), then
+            # log to stderr for dev-machine diagnostics. The next
+            # snapshot fires soon and gets its own try.
+            try:
+                self.emitter.render_failed.emit(
+                    f"Snapshot render failed: {type(exc).__name__}: {exc}"
+                )
+            except Exception:
+                # The emitter may have been deleted by Qt during
+                # teardown; best-effort only.
+                pass
             import sys
             import traceback
             print(
@@ -86,4 +105,4 @@ class _RenderSnapshotJob(QRunnable):
             return
         # Emit the canvas. AutoConnection routes: Direct (same thread in
         # tests), Queued (cross-thread from QThreadPool in production).
-        self._emitter.canvas_ready.emit(canvas)
+        self.emitter.canvas_ready.emit(canvas)
