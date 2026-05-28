@@ -98,3 +98,31 @@ def test_block_modal_fires_when_no_safe_max_res(monkeypatch):
 
     assert proceed is False
     block_modal.assert_called_once()
+
+
+def test_backprop_raises_silently_on_big_card(monkeypatch):
+    """When recommended > baked, helper raises max_res without any modal."""
+    from forza_abyss_painter.gui import gpu_preflight as pre
+
+    monkeypatch.setattr(pre, "_probe_free_gib", lambda budget_gib: 80.0)
+    monkeypatch.setattr(pre, "_recommend", lambda K, free_gib: 1200)
+
+    lower_modal = MagicMock()
+    warn_modal = MagicMock()
+    block_modal = MagicMock()
+    monkeypatch.setattr(pre, "_show_lower_modal", lower_modal)
+    monkeypatch.setattr(pre, "_show_warn_modal", warn_modal)
+    monkeypatch.setattr(pre, "_show_block_modal", block_modal)
+
+    proceed, effective = pre.gpu_run_preflight(
+        parent=None,
+        preset={"random_samples": 1000, "max_resolution": 700},
+        budget_gib=80.0,
+        context="Generate from drop",
+    )
+
+    assert proceed is True
+    assert effective["max_resolution"] == 1200
+    lower_modal.assert_not_called()
+    warn_modal.assert_not_called()
+    block_modal.assert_not_called()

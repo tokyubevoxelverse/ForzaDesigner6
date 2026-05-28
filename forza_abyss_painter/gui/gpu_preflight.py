@@ -175,6 +175,10 @@ def gpu_run_preflight(
         # contract. No second verdict needed.
         return True, effective
 
+    elif recommended > baked:
+        # Raise silently on big-VRAM cards; UI shows the autotune message via status bar.
+        effective["max_resolution"] = recommended
+
     peak_gib = estimate_peak_vram_gib(
         K=K, bbox_local=True, max_resolution=int(effective["max_resolution"]),
     )
