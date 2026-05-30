@@ -311,7 +311,7 @@ class Engine:
         requested = _gpu.resolve_backend(getattr(self.profile, "compute_backend", "auto"))
         if requested == "gpu" and ellipse_only:
             try:
-                self._gpu = _gpu.EllipseBatchSearcher(self.target, self.alpha_mask, self.edge_weight)
+                self._gpu = _gpu.OpenCLEllipseSearcher(self.target, self.alpha_mask, self.edge_weight)
                 self._backend = "gpu"
             except Exception:
                 self._gpu = None

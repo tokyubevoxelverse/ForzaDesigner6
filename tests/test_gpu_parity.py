@@ -10,7 +10,7 @@ import math
 
 import numpy as np
 
-from fd6.shapegen.gpu import EllipseBatchSearcher, resolve_backend, gpu_available
+from fd6.shapegen.gpu import EllipseBatchSearcher, resolve_backend, gpu_detected_without_install
 from fd6.shapegen.shapes.ellipse import RotatedEllipse
 from fd6.shapegen.scoring import compute_edge_weight, precompute_canvas_error, score_shape
 
@@ -72,11 +72,10 @@ def test_sticker_rejection_matches():
     assert math.isinf(cpu_score) and math.isinf(gpu_score)
 
 
-def test_resolve_backend_without_cuda_is_cpu():
-    # On a box with no NVIDIA GPU (e.g. the dev machine / an AMD handheld),
-    # every request must resolve to CPU and never raise.
+def test_resolve_backend_is_safe():
+    # Must never raise. 'cpu' is always CPU; 'auto' resolves without ever
+    # triggering a network install (only uses the GPU if a runtime is already
+    # present). We avoid calling the install path here so tests stay offline.
     assert resolve_backend("cpu") == "cpu"
     assert resolve_backend("auto") in ("cpu", "gpu")
-    if not gpu_available():
-        assert resolve_backend("gpu") == "cpu"
-        assert resolve_backend("auto") == "cpu"
+    assert isinstance(gpu_detected_without_install(), bool)

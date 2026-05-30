@@ -20,11 +20,11 @@ SHAPE_TYPE_CHOICES = [
     ("triangle", "Triangle (coming soon)"),
 ]
 
-# Compute backend choices for the shape search. GPU uses CuPy (NVIDIA CUDA).
+# Compute backend choices for the shape search. GPU uses OpenCL (cross-vendor).
 COMPUTE_BACKEND_CHOICES = [
-    ("auto", "Auto (GPU if available)"),
+    ("auto", "Auto (GPU if ready)"),
     ("cpu", "CPU"),
-    ("gpu", "GPU (NVIDIA CUDA)"),
+    ("gpu", "GPU (OpenCL — NVIDIA / AMD / Intel)"),
 ]
 
 
@@ -63,31 +63,23 @@ class SettingsPanel(QWidget):
         # Compute backend picker (chosen before generation). GPU = CuPy/CUDA.
         compute_row = QHBoxLayout()
         compute_label = QLabel("Compute:")
-        from fd6.shapegen.gpu import gpu_available
-        self._gpu_available = bool(gpu_available())
         compute_tip = (
             "Which processor runs the shape search.\n\n"
-            "Auto (recommended): use an NVIDIA GPU if one is detected, otherwise CPU.\n"
+            "Auto: use the GPU if its runtime is already set up, otherwise CPU "
+            "(never downloads anything on its own).\n"
             "CPU: always use the multi-core CPU path (works on every machine).\n"
-            "GPU (NVIDIA CUDA): force the GPU path — needs an NVIDIA card with CUDA "
-            "+ the CuPy package. If a GPU isn't available it safely falls back to CPU.\n\n"
-            "GPU acceleration currently applies to the default Rotated Ellipse shape."
+            "GPU (OpenCL): use ANY OpenCL GPU — NVIDIA, AMD, or Intel — through "
+            "your graphics driver. The first time you pick GPU, FD6 downloads a "
+            "small GPU runtime once (~tens of MB) so the app itself stays lean; "
+            "keep your GPU drivers up to date. If no GPU is usable it falls back "
+            "to CPU automatically.\n\n"
+            "GPU acceleration applies to the default Rotated Ellipse shape."
         )
-        if not self._gpu_available:
-            compute_tip += "\n\nNo NVIDIA CUDA GPU detected on this machine — runs on CPU."
         compute_label.setToolTip(compute_tip)
         compute_row.addWidget(compute_label)
         self.compute_backend = QComboBox(self)
         for code, label in COMPUTE_BACKEND_CHOICES:
             self.compute_backend.addItem(label, code)
-            if code == "gpu" and not self._gpu_available:
-                # Keep the option visible (so users know it exists) but disabled.
-                idx = self.compute_backend.count() - 1
-                model = self.compute_backend.model()
-                item = model.item(idx)
-                if item is not None:
-                    item.setEnabled(False)
-                self.compute_backend.setItemText(idx, "GPU (NVIDIA CUDA — not detected)")
         self.compute_backend.setCurrentIndex(0)  # Auto
         self.compute_backend.setToolTip(compute_tip)
         self.compute_backend.currentIndexChanged.connect(self._on_adv_changed)
@@ -339,11 +331,9 @@ class SettingsPanel(QWidget):
             else:
                 cb.setChecked(False)
             cb.blockSignals(False)
-        # Sync the compute backend from the profile, but never select a disabled
-        # GPU option on a machine without a CUDA device.
+        # Sync the compute backend from the profile. GPU is always selectable —
+        # it resolves to OpenCL at run time and falls back to CPU if unavailable.
         want = getattr(prof, "compute_backend", "auto")
-        if want == "gpu" and not getattr(self, "_gpu_available", False):
-            want = "auto"
         ci = self.compute_backend.findData(want)
         if ci >= 0:
             self.compute_backend.blockSignals(True)

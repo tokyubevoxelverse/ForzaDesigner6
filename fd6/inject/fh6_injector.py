@@ -710,60 +710,83 @@ class FH6Injector(Injector):
             tries = [layer_count] + [c for c in common if c > layer_count]
         else:
             tries = common
+        # PHASE 1 — fast sphere-fingerprint ("circle") scan across EVERY candidate
+        # size BEFORE any slow fallback. This is the method users rely on.
+        #
+        # The previous code interleaved the slow RTTI scan PER SIZE: for a small
+        # JSON (e.g. 20 shapes) tries=[20, 500, 1500, 3000, …], so it ran a full
+        # 2–5 min RTTI scan hunting a nonexistent 20-layer group BEFORE it ever
+        # tried the 500/1500/3000 template that was actually loaded — and a 3000
+        # JSON (tries=[3000]) got only a single fast attempt before RTTI. 1500
+        # "always worked" only because sphere(1500) hits instantly and RTTI never
+        # ran. Trying every sphere size first fixes both the 20 and 3000 reports.
+        result = None
+        found_count = None
         for count_try in tries:
             if count_try is None:
                 continue
-            # PRIMARY: fingerprint scan (fast, proven sphere-template method).
-            result = locate_livery_group(self._proc, count_try, progress_cb=progress_cb)
-            if result is None:
-                # Sphere fingerprint missed — the template has likely been
-                # injected on previously. Notify the GUI and try RTTI.
-                if status_cb:
-                    status_cb(
-                        f"Sphere-template scan found no fresh {count_try}-layer group "
-                        f"(template may already be painted). Falling back to RTTI "
-                        f"vtable scan — this can take an extra 2–5 minutes on a "
-                        f"large game while it reads the code section. "
-                        f"DO NOT click anything in FD6 or interact with the app during "
-                        f"this phase — clicking can trigger a 'Not Responding' freeze "
-                        f"that may force-quit the injector before it finishes. The "
-                        f"scan is running in the background and will resume the dialog "
-                        f"once a candidate is located."
-                    )
-                result = self._try_rtti_locate(count_try, progress_cb=progress_cb, status_cb=status_cb)
-            if result is not None:
-                self._group_addr, self._table_addr = result
-                self._layer_count = count_try
-                # Bulk-read the entire layer-pointer table in ONE syscall instead
-                # of count_try individual ReadProcessMemory calls. The previous
-                # per-pointer loop locked the worker thread for 1500-3000 ctypes
-                # calls back-to-back, which Windows happily labelled "Not
-                # Responding" — same outcome, but in a fraction of the time and
-                # without the visible freeze.
-                table_bytes = self._proc.try_read(self._table_addr, count_try * 8)
-                if table_bytes and len(table_bytes) == count_try * 8:
-                    addrs = list(struct.unpack(f"<{count_try}Q", table_bytes))
-                else:
-                    # Fallback: per-pointer read if the bulk read was short
-                    # (e.g. table straddles an unreadable page). Rare.
-                    addrs = [_read_u64(self._proc, self._table_addr + i * 8)
-                             for i in range(count_try)]
-                if status_cb:
-                    status_cb(
-                        f"Located vinyl group with {count_try} layer slots. "
-                        f"Writing shapes now…"
-                    )
-                return VinylGroupHandle(
-                    base_addr=self._group_addr,
-                    layer_count=count_try,
-                    shape_array_addr=self._table_addr,
-                    shape_stride=8,  # pointer stride in layer table
-                    meta={
-                        "group_addr": self._group_addr,
-                        "table_addr": self._table_addr,
-                        "layer_addrs": addrs,
-                    },
+            r = locate_livery_group(self._proc, count_try, progress_cb=progress_cb)
+            if r is not None:
+                result, found_count = r, count_try
+                break
+
+        # PHASE 2 — only if EVERY fast sphere scan missed (e.g. an already-painted
+        # template whose layers no longer match the fresh-sphere fingerprint) do
+        # we fall back to the slower RTTI vtable scan. Runs once per size and
+        # early-exits on the first confident match.
+        if result is None:
+            if status_cb:
+                status_cb(
+                    "Fast sphere-template scan found no match at any standard size "
+                    "(your template may already be painted). Falling back to the "
+                    "slower RTTI vtable scan — this can take an extra 2–5 minutes on "
+                    "a large game while it reads the code section. DO NOT click "
+                    "anything in FD6 during this phase — clicking can trigger a "
+                    "'Not Responding' freeze that may force-quit the injector before "
+                    "it finishes."
                 )
+            for count_try in tries:
+                if count_try is None:
+                    continue
+                r = self._try_rtti_locate(count_try, progress_cb=progress_cb, status_cb=status_cb)
+                if r is not None:
+                    result, found_count = r, count_try
+                    break
+
+        if result is not None:
+            count_try = found_count
+            self._group_addr, self._table_addr = result
+            self._layer_count = count_try
+            # Bulk-read the entire layer-pointer table in ONE syscall instead
+            # of count_try individual ReadProcessMemory calls. The previous
+            # per-pointer loop locked the worker thread for 1500-3000 ctypes
+            # calls back-to-back, which Windows happily labelled "Not
+            # Responding" — same outcome, but in a fraction of the time and
+            # without the visible freeze.
+            table_bytes = self._proc.try_read(self._table_addr, count_try * 8)
+            if table_bytes and len(table_bytes) == count_try * 8:
+                addrs = list(struct.unpack(f"<{count_try}Q", table_bytes))
+            else:
+                # Fallback: per-pointer read if the bulk read was short
+                # (e.g. table straddles an unreadable page). Rare.
+                addrs = [_read_u64(self._proc, self._table_addr + i * 8)
+                         for i in range(count_try)]
+            if status_cb:
+                status_cb(
+                    f"Located vinyl group with {count_try} layer slots. "
+                    f"Writing shapes now…"
+                )
+            return VinylGroupHandle(
+                base_addr=self._group_addr,
+                layer_count=count_try,
+                shape_array_addr=self._table_addr,
+                shape_stride=8,  # pointer stride in layer table
+                meta={
+                    "group_addr": self._group_addr,
+                    "table_addr": self._table_addr,
+                    "layer_addrs": addrs,
+                },
+            )
         raise RuntimeError(
             "No confident LiveryGroup match (strict 16/16 + 95% full-table validation). "
             "This is intentional — refusing to write to a low-confidence candidate would "

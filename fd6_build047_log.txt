@@ -1,0 +1,244 @@
+767 INFO: PyInstaller: 6.19.0, contrib hooks: 2026.4
+769 INFO: Python: 3.14.4
+831 INFO: Platform: Windows-11-10.0.26200-SP0
+831 INFO: Python environment: C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64
+834 INFO: wrote C:\Users\tokyo\Documents\forza-painter-master\FD6\FD6MultiSupport047.spec
+23220 INFO: Module search paths (PYTHONPATH):
+['C:\\Users\\tokyo\\Documents\\forza-painter-master\\FD6',
+ 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\python314.zip',
+ 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\DLLs',
+ 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib',
+ 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64',
+ 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages',
+ 'C:\\Users\\tokyo\\Documents\\forza-painter-master\\FD6']
+25829 INFO: Appending 'binaries' from .spec
+25885 INFO: Appending 'datas' from .spec
+26525 INFO: checking Analysis
+26526 INFO: Building Analysis because Analysis-00.toc is non existent
+26526 INFO: Looking for Python shared library...
+26526 INFO: Using Python shared library: C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\python314.dll
+26526 INFO: Running Analysis Analysis-00.toc
+26526 INFO: Target bytecode optimization level: 0
+26526 INFO: Initializing module dependency graph...
+26530 INFO: Initializing module graph hook caches...
+26740 INFO: Analyzing modules for base_library.zip ...
+31765 INFO: Processing standard module hook 'hook-encodings.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+32995 INFO: Processing standard module hook 'hook-pickle.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+33948 INFO: Processing standard module hook 'hook-difflib.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+34008 INFO: Processing standard module hook 'hook-heapq.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+47320 INFO: Caching module dependency graph...
+47386 INFO: Analyzing C:\Users\tokyo\Documents\forza-painter-master\FD6\fd6\__main__.py
+47595 INFO: Processing standard module hook 'hook-multiprocessing.util.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+47997 INFO: Processing standard module hook 'hook-xml.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+49251 INFO: Processing standard module hook 'hook-sysconfig.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+49295 INFO: Processing standard module hook 'hook-_ctypes.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+49510 INFO: Processing standard module hook 'hook-PySide6.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+49946 INFO: Processing standard module hook 'hook-shiboken6.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+50736 INFO: Processing standard module hook 'hook-PySide6.QtNetwork.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+60982 INFO: Processing standard module hook 'hook-PySide6.QtCore.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+71890 INFO: Processing standard module hook 'hook-PySide6.QtGui.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+127998 INFO: Processing standard module hook 'hook-PySide6.QtWidgets.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+137981 INFO: Processing standard module hook 'hook-numpy.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+139816 INFO: Processing pre-safe-import-module hook 'hook-typing_extensions.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+139822 INFO: SetuptoolsInfo: initializing cached setuptools info...
+146356 INFO: Processing standard module hook 'hook-platform.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+148543 INFO: Processing standard module hook 'hook-psutil.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+153938 INFO: Processing standard module hook 'hook-charset_normalizer.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+162685 INFO: Processing pre-safe-import-module hook 'hook-backports.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+162688 INFO: Setuptools: 'backports' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._vendor.backports'!
+162725 INFO: Processing standard module hook 'hook-setuptools.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+162848 INFO: Processing pre-safe-import-module hook 'hook-distutils.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+163047 INFO: Processing pre-safe-import-module hook 'hook-jaraco.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+163050 INFO: Setuptools: 'jaraco' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._vendor.jaraco'!
+163106 INFO: Processing pre-safe-import-module hook 'hook-more_itertools.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+163108 INFO: Setuptools: 'more_itertools' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.more_itertools'!
+164054 INFO: Processing pre-safe-import-module hook 'hook-packaging.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+165041 INFO: Processing standard module hook 'hook-setuptools._vendor.jaraco.text.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+165048 INFO: Processing pre-safe-import-module hook 'hook-importlib_resources.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+165943 INFO: Processing pre-safe-import-module hook 'hook-importlib_metadata.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+165945 INFO: Setuptools: 'importlib_metadata' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.importlib_metadata'!
+166036 INFO: Processing standard module hook 'hook-setuptools._vendor.importlib_metadata.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+166315 INFO: Processing pre-safe-import-module hook 'hook-zipp.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+166318 INFO: Setuptools: 'zipp' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.zipp'!
+167678 INFO: Processing pre-safe-import-module hook 'hook-tomli.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+167680 INFO: Setuptools: 'tomli' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.tomli'!
+170119 INFO: Processing pre-safe-import-module hook 'hook-wheel.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+170122 INFO: Setuptools: 'wheel' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.wheel'!
+175826 INFO: Processing standard module hook 'hook-cryptography.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+180641 INFO: hook-cryptography: cryptography does not seem to be using dynamically linked OpenSSL.
+187553 INFO: Processing standard module hook 'hook-sqlite3.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+189950 INFO: Processing standard module hook 'hook-_osx_support.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+192903 INFO: Processing standard module hook 'hook-pyopencl.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+193788 INFO: Processing pre-safe-import-module hook 'hook-platformdirs.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+193837 INFO: Processing standard module hook 'hook-platformdirs.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+195220 INFO: Processing standard module hook 'hook-pytest.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+196096 INFO: Processing standard module hook 'hook-pygments.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+199578 INFO: Processing standard module hook 'hook-py.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+203985 INFO: Processing standard module hook 'hook-PySide6.QtWebEngineCore.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+212084 INFO: Processing standard module hook 'hook-PySide6.QtWebChannel.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+214670 INFO: Processing standard module hook 'hook-PySide6.QtWebEngineWidgets.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+217729 INFO: Processing standard module hook 'hook-PySide6.QtPrintSupport.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+220481 INFO: Processing standard module hook 'hook-PIL.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+220760 INFO: Processing standard module hook 'hook-PIL.Image.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+221819 INFO: Processing standard module hook 'hook-xml.etree.cElementTree.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+222337 INFO: Processing standard module hook 'hook-PIL.ImageFilter.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+223488 INFO: Processing standard module hook 'hook-PySide6.QtMultimedia.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+237451 INFO: Processing standard module hook 'hook-PySide6.QtMultimediaWidgets.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+240108 INFO: Analyzing hidden import 'PySide6.QtWebEngineQuick'
+240194 INFO: Processing standard module hook 'hook-PySide6.QtWebEngineQuick.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+242697 INFO: Analyzing hidden import 'fd6.inject.cli'
+242773 INFO: Analyzing hidden import 'pytools.convergence'
+242817 INFO: Analyzing hidden import 'pytools.datatable'
+242859 INFO: Analyzing hidden import 'pytools.debug'
+242899 INFO: Analyzing hidden import 'pytools.lex'
+242940 INFO: Analyzing hidden import 'pytools.mpi'
+242973 INFO: Analyzing hidden import 'pytools.mpiwrap'
+243041 INFO: Analyzing hidden import 'pytools.obj_array'
+243108 INFO: Analyzing hidden import 'pytools.spatial_btree'
+243148 INFO: Analyzing hidden import 'pytools.stopwatch'
+243179 INFO: Analyzing hidden import 'pytools.tag'
+243230 INFO: Analyzing hidden import 'pytools.test'
+243232 INFO: Analyzing hidden import 'pytools.test.test_data_table'
+243262 INFO: Analyzing hidden import 'pytools.test.test_dataclasses'
+243292 INFO: Analyzing hidden import 'pytools.test.test_graph_tools'
+243338 INFO: Analyzing hidden import 'pytools.test.test_math_stuff'
+243360 INFO: Analyzing hidden import 'pytools.test.test_mpi'
+243384 INFO: Analyzing hidden import 'pytools.test.test_persistent_dict'
+243677 INFO: Analyzing hidden import 'pytools.test.test_py_codegen'
+243716 INFO: Analyzing hidden import 'pytools.test.test_pytools'
+243797 INFO: Analyzing hidden import 'pyopencl.algorithm'
+243879 INFO: Analyzing hidden import 'pyopencl.bitonic_sort'
+243941 INFO: Analyzing hidden import 'pyopencl.characterize.performance'
+243977 INFO: Analyzing hidden import 'pyopencl.clmath'
+244018 INFO: Analyzing hidden import 'pyopencl.clrandom'
+244056 INFO: Analyzing hidden import 'pyopencl.ipython_ext'
+244081 INFO: Processing module hooks (post-graph stage)...
+245978 INFO: Processing standard module hook 'hook-PIL.SpiderImagePlugin.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+259233 INFO: Processing standard module hook 'hook-PySide6.QtQuick.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+267814 INFO: Processing standard module hook 'hook-PySide6.QtOpenGL.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+278241 INFO: Processing standard module hook 'hook-PySide6.QtQml.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+--- Logging error ---
+Traceback (most recent call last):
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\logging\__init__.py", line 1151, in emit
+    msg = self.format(record)
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\logging\__init__.py", line 999, in format
+    return fmt.format(record)
+           ~~~~~~~~~~^^^^^^^^
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\logging\__init__.py", line 712, in format
+    record.message = record.getMessage()
+                     ~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\logging\__init__.py", line 400, in getMessage
+    msg = msg % self.args
+          ~~~~^~~~~~~~~~~
+TypeError: not enough arguments for format string
+Call stack:
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\__main__.py", line 321, in <module>
+    run()
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\__main__.py", line 215, in run
+    run_build(pyi_config, spec_file, **vars(args))
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\__main__.py", line 70, in run_build
+    PyInstaller.building.build_main.main(pyi_config, spec_file, **kwargs)
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\building\build_main.py", line 1275, in main
+    build(specfile, distpath, workpath, clean_build)
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\building\build_main.py", line 1213, in build
+    exec(code, spec_namespace)
+  File "C:\Users\tokyo\Documents\forza-painter-master\FD6\FD6MultiSupport047.spec", line 18, in <module>
+    a = Analysis(
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\building\build_main.py", line 584, in __init__
+    self.__postinit__()
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\building\datastruct.py", line 184, in __postinit__
+    self.assemble()
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\building\build_main.py", line 722, in assemble
+    self.graph.process_post_graph_hooks(self)
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\depend\analysis.py", line 342, in process_post_graph_hooks
+    module_hook.post_graph(analysis)
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\depend\imphook.py", line 489, in post_graph
+    self._process_hidden_imports()
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\depend\imphook.py", line 546, in _process_hidden_imports
+    self.module_graph.import_hook(import_module_name, caller)
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\lib\modulegraph\modulegraph.py", line 1279, in import_hook
+    submodule = self._safe_import_module(head, mname, submodule)
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\depend\analysis.py", line 539, in _safe_import_module
+    return super()._safe_import_module(module_basename, module_name, parent_package)
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\lib\modulegraph\modulegraph.py", line 1826, in _safe_import_module
+    self._process_imports(n)
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\lib\modulegraph\modulegraph.py", line 2654, in _process_imports
+    target_modules = self._safe_import_hook(*import_info, **kwargs)
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\depend\analysis.py", line 477, in _safe_import_hook
+    ret_modules = super()._safe_import_hook(
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\lib\modulegraph\modulegraph.py", line 2103, in _safe_import_hook
+    target_modules = self.import_hook(
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\lib\modulegraph\modulegraph.py", line 1279, in import_hook
+    submodule = self._safe_import_module(head, mname, submodule)
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\depend\analysis.py", line 539, in _safe_import_module
+    return super()._safe_import_module(module_basename, module_name, parent_package)
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\lib\modulegraph\modulegraph.py", line 1826, in _safe_import_module
+    self._process_imports(n)
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\lib\modulegraph\modulegraph.py", line 2654, in _process_imports
+    target_modules = self._safe_import_hook(*import_info, **kwargs)
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\depend\analysis.py", line 385, in _safe_import_hook
+    excluded_imports = self._find_all_excluded_imports(source_module.identifier)
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\depend\analysis.py", line 373, in _find_all_excluded_imports
+    excluded_imports.update(module_hook.excludedimports)
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\depend\imphook.py", line 343, in __getattr__
+    self._load_hook_module()
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\depend\imphook.py", line 422, in _load_hook_module
+    self._hook_module = importlib_load_source(self.hook_module_name, self.hook_filename)
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\compat.py", line 559, in importlib_load_source
+    mod_loader.exec_module(mod)
+  File "<frozen importlib._bootstrap_external>", line 759, in exec_module
+  File "<frozen importlib._bootstrap>", line 491, in _call_with_frames_removed
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\hooks\hook-PySide6.QtQml.py", line 15, in <module>
+    qml_binaries, qml_datas = pyside6_library_info.collect_qtqml_files()
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\utils\hooks\qt\__init__.py", line 963, in collect_qtqml_files
+    plugin_binaries, plugin_datas = self._process_qml_plugin(qmldir_file)
+  File "C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\utils\hooks\qt\__init__.py", line 1014, in _process_qml_plugin
+    logger.warn("%s: QML plugin binary %r does not exist!", str(plugin_file))
+Message: '%s: QML plugin binary %r does not exist!'
+Arguments: ('C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PySide6\\qml\\Qt\\labs\\assetdownloader\\qmlassetdownloaderprivateplugin.dll',)
+424798 INFO: Processing standard module hook 'hook-PySide6.QtPositioning.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+432259 INFO: Processing standard module hook 'hook-PySide6.QtQuickWidgets.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+436456 INFO: Performing binary vs. data reclassification (3707 entries)
+492822 INFO: Looking for ctypes DLLs
+493083 INFO: Analyzing run-time hooks ...
+493099 INFO: Including run-time hook 'pyi_rth_inspect.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+493127 INFO: Including run-time hook 'pyi_rth_pkgutil.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+493160 INFO: Including run-time hook 'pyi_rth_setuptools.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+493186 INFO: Including run-time hook 'pyi_rth_pyside6.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+493215 INFO: Processing pre-find-module-path hook 'hook-_pyi_rth_utils.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\pre_find_module_path'
+493246 INFO: Processing standard module hook 'hook-_pyi_rth_utils.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks'
+493297 INFO: Including run-time hook 'pyi_rth_cryptography_openssl.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\rthooks'
+493320 INFO: Including run-time hook 'pyi_rth_multiprocessing.py' from 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+493569 INFO: Creating base_library.zip...
+493616 INFO: Looking for dynamic libraries
+500239 INFO: Extra DLL search directories (AddDllDirectory): ['C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\shiboken6', 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\numpy.libs']
+500239 INFO: Extra DLL search directories (PATH): ['C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PySide6']
+515325 WARNING: Library not found: could not resolve 'fbclient.dll', dependency of 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PySide6\\plugins\\sqldrivers\\qsqlibase.dll'.
+515326 WARNING: Library not found: could not resolve 'MIMAPI64.dll', dependency of 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PySide6\\plugins\\sqldrivers\\qsqlmimer.dll'.
+515326 WARNING: Library not found: could not resolve 'OCI.dll', dependency of 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PySide6\\plugins\\sqldrivers\\qsqloci.dll'.
+515326 WARNING: Library not found: could not resolve 'LIBPQ.dll', dependency of 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PySide6\\plugins\\sqldrivers\\qsqlpsql.dll'.
+515327 WARNING: Library not found: could not resolve 'Qt6QuickShapesDesignHelpers.dll', dependency of 'C:\\Users\\tokyo\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages\\PySide6\\qml\\QtQuick\\Shapes\\DesignHelpers\\qtquickshapesdesignhelpersplugin.dll'.
+515698 INFO: Warnings written to C:\Users\tokyo\Documents\forza-painter-master\FD6\build\FD6MultiSupport047\warn-FD6MultiSupport047.txt
+516064 INFO: Graph cross-reference written to C:\Users\tokyo\Documents\forza-painter-master\FD6\build\FD6MultiSupport047\xref-FD6MultiSupport047.html
+516746 INFO: checking PYZ
+516746 INFO: Building PYZ because PYZ-00.toc is non existent
+516746 INFO: Building PYZ (ZlibArchive) C:\Users\tokyo\Documents\forza-painter-master\FD6\build\FD6MultiSupport047\PYZ-00.pyz
+518978 INFO: Building PYZ (ZlibArchive) C:\Users\tokyo\Documents\forza-painter-master\FD6\build\FD6MultiSupport047\PYZ-00.pyz completed successfully.
+519191 INFO: checking PKG
+519192 INFO: Building PKG because PKG-00.toc is non existent
+519192 INFO: Building PKG (CArchive) FD6MultiSupport047.pkg
+598136 INFO: Building PKG (CArchive) FD6MultiSupport047.pkg completed successfully.
+598325 INFO: Bootloader C:\Users\tokyo\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\PyInstaller\bootloader\Windows-64bit-intel\runw.exe
+598325 INFO: checking EXE
+598326 INFO: Building EXE because EXE-00.toc is non existent
+598326 INFO: Building EXE from EXE-00.toc
+598326 INFO: Copying bootloader EXE to C:\Users\tokyo\Documents\forza-painter-master\FD6\dist\FD6MultiSupport047.exe
+598351 INFO: Copying icon to EXE
+598579 INFO: Copying 0 resources to EXE
+598579 INFO: Embedding manifest in EXE
+598728 INFO: Appending PKG archive to EXE
+599655 INFO: Fixing EXE headers
+630305 INFO: Building EXE from EXE-00.toc completed successfully.
+630507 INFO: Build complete! The results are available in: C:\Users\tokyo\Documents\forza-painter-master\FD6\dist
