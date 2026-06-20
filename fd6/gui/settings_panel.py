@@ -13,8 +13,7 @@ from fd6.shapegen.profile import Profile, load_profile_from_file, list_bundled_p
 
 SHAPE_TYPE_CHOICES = [
     ("rotated_ellipse", "Rotated Ellipse (default)"),
-    ("rectangle", "Rectangle (coming soon)"),
-    ("rotated_rectangle", "Rotated Rectangle (coming soon)"),
+    ("rotated_rectangle", "Square / Box (rotatable)"),
     ("ellipse", "Ellipse (coming soon)"),
     ("circle", "Circle (coming soon)"),
     ("triangle", "Triangle (coming soon)"),
@@ -73,7 +72,8 @@ class SettingsPanel(QWidget):
             "small GPU runtime once (~tens of MB) so the app itself stays lean; "
             "keep your GPU drivers up to date. If no GPU is usable it falls back "
             "to CPU automatically.\n\n"
-            "GPU acceleration applies to the default Rotated Ellipse shape."
+            "GPU acceleration applies to the default Rotated Ellipse shape; "
+            "Square / Box generation uses the CPU path."
         )
         compute_label.setToolTip(compute_tip)
         compute_row.addWidget(compute_label)
@@ -189,13 +189,17 @@ class SettingsPanel(QWidget):
         sg_layout.addWidget(self.cap_2048_cb)
         layout.addWidget(sticker_group)
 
-        # Shape types. Only rotated_ellipse is confirmed-working for the current
-        # FH6 build; remaining primitives are disabled pending further work.
-        supported_codes = {"rotated_ellipse"}
+        # Shape types. Square / Box maps to the existing rotatable rectangle
+        # generator and FH layer payload used by the injector.
+        supported_codes = {"rotated_ellipse", "rotated_rectangle"}
         supported_tooltips = {
             "rotated_ellipse": (
                 "An oval that can be rotated to any angle. Fits organic / "
                 "curvy content (faces, smoke, foliage) best."
+            ),
+            "rotated_rectangle": (
+                "Uses the FH square/box vinyl layer. Equal width and height "
+                "produce a square; independent X/Y scale produces a box."
             ),
         }
         types_group = QGroupBox("Shape types", self)
@@ -339,9 +343,9 @@ class SettingsPanel(QWidget):
             w.blockSignals(False)
         for code, cb in self._shape_checks.items():
             cb.blockSignals(True)
-            # Disabled shape types (everything except rotated_ellipse in v0.3.5)
-            # stay unchecked regardless of what the loaded profile prefers,
-            # so a profile that requests triangles can't sneak past the gray-out.
+            # Disabled shape types stay unchecked regardless of what the
+            # loaded profile prefers, so unsupported entries cannot sneak past
+            # the gray-out.
             if cb.isEnabled():
                 cb.setChecked(code in prof.shape_types)
             else:
