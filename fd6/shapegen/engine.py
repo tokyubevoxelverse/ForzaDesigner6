@@ -102,7 +102,7 @@ class EngineConfig:
 @dataclass
 class EngineEvent:
     """Event emitted at preview/save points. The worker translates these into Qt signals."""
-    kind: str  # "shape_committed" | "checkpoint" | "preview" | "done" | "error" | "backend"
+    kind: str  # "search_started" | "shape_committed" | "checkpoint" | "preview" | "done" | "error" | "backend"
     shape_count: int = 0
     rms: float = 0.0
     canvas: np.ndarray | None = None  # uint8 (H, W, 3); only set for preview/done
@@ -494,6 +494,21 @@ class Engine:
                 progress = len(self.shapes) / max(1, p.stop_at)
                 size_cap = self._max_size_frac_for_progress(progress)
 
+                search_backend = self._backend.upper()
+                search_detail = (
+                    f"{self._n_workers} CPU worker(s)"
+                    if self._backend == "cpu"
+                    else "accelerated search"
+                )
+                yield EngineEvent(
+                    kind="search_started",
+                    shape_count=len(self.shapes),
+                    rms=self.rms,
+                    message=(
+                        f"Searching shape {len(self.shapes) + 1}/{p.stop_at} "
+                        f"on {search_backend} with {search_detail}."
+                    ),
+                )
                 refined_score, refined = self._search(
                     iter_types, max(1, p.random_samples), max(1, p.mutated_samples),
                     max_size_frac=size_cap,

@@ -931,9 +931,12 @@ class MainWindow(QMainWindow):
         self._thread = QThread(self)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
+        self._worker.search_progress.connect(self.preview.on_search_progress)
         self._worker.progress.connect(self.preview.on_progress)
+        self._worker.progress_details.connect(self.preview.on_progress_details)
         self._worker.preview.connect(self.preview.on_preview)
         self._worker.checkpoint_written.connect(lambda p: self.statusBar().showMessage(f"Checkpoint: {p}", 4000))
+        self._worker.backend_ready.connect(self.preview.on_backend)
         self._worker.backend_ready.connect(lambda label: self.statusBar().showMessage(f"Compute: {label}", 8000))
         self._worker.finished.connect(self._on_finished)
         self._worker.error.connect(self._on_error)
@@ -949,6 +952,9 @@ class MainWindow(QMainWindow):
             self.queue.set_status(self._current_uid, "done")
         self._last_finished_json = Path(out_path)
         self.statusBar().showMessage(f"Saved: {out_path}", 8000)
+        search_status = getattr(self.preview, "search_status_label", None)
+        if search_status is not None:
+            search_status.setText(f"Generation complete: {self._last_finished_json.name}")
         # Visual cue: green-pulse the Download JSON button so the user knows it's ready
         self.upload.mark_json_ready(self._last_finished_json)
         self._teardown_thread()
