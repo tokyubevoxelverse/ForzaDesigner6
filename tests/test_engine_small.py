@@ -38,6 +38,33 @@ def test_engine_reduces_rms_over_first_shapes():
     assert len(engine.shapes) == profile.stop_at
 
 
+def test_engine_can_generate_square_box_shapes():
+    target = _make_target(32)
+    profile = Profile(
+        name="box",
+        stop_at=4,
+        random_samples=20,
+        mutated_samples=5,
+        preview_every=4,
+        save_at=[],
+        save_every=0,
+        max_resolution=64,
+        max_threads=1,
+        shape_types=["rotated_rectangle"],
+        compute_backend="cpu",
+    )
+    engine = Engine(target, EngineConfig(profile=profile, seed=12345))
+
+    final_rms = None
+    for ev in engine.run():
+        if ev.kind == "done":
+            final_rms = ev.rms
+
+    assert final_rms is not None
+    assert len(engine.shapes) == profile.stop_at
+    assert {shape.type_name for shape in engine.shapes} == {"rotated_rectangle"}
+
+
 def test_engine_stops_when_requested():
     target = _make_target(32)
     profile = Profile(
