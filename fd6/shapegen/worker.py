@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 import numpy as np
 from PIL import Image
 from PySide6.QtCore import QObject, QThread, Signal
@@ -15,6 +16,8 @@ class GenerationWorker(QObject):
     """Wraps Engine.run() in a QThread-friendly object. Emits Qt signals for the GUI."""
 
     progress = Signal(int, int, float)  # shape_count, total, rms
+    progress_details = Signal(int, int, float, float, float)  # count, total, rms, shapes/sec, eta seconds
+    search_progress = Signal(int, int, float, str)  # count before commit, total, rms, message
     preview = Signal(object)            # np.ndarray (H,W,3) uint8
     finished = Signal(str)              # final json output path
     error = Signal(str)
@@ -118,10 +121,29 @@ class GenerationWorker(QObject):
             self._engine = Engine(target, EngineConfig(profile=self.profile), alpha_mask=alpha_mask)
             stem = self.image_path.stem
             final_path = self.output_dir / f"{stem}.json"
+            started = time.perf_counter()
 
             for event in self._engine.run():
-                if event.kind == "shape_committed":
+                if event.kind == "search_started":
+                    self.search_progress.emit(
+                        event.shape_count,
+                        self.profile.stop_at,
+                        event.rms,
+                        event.message,
+                    )
+                elif event.kind == "shape_committed":
                     self.progress.emit(event.shape_count, self.profile.stop_at, event.rms)
+                    elapsed = max(1e-6, time.perf_counter() - started)
+                    rate = event.shape_count / elapsed
+                    remaining = max(0, self.profile.stop_at - event.shape_count)
+                    eta = remaining / rate if rate > 0 else 0.0
+                    self.progress_details.emit(
+                        event.shape_count,
+                        self.profile.stop_at,
+                        event.rms,
+                        rate,
+                        eta,
+                    )
                 elif event.kind == "backend":
                     self.backend_ready.emit(event.message)
                 elif event.kind == "preview" and event.canvas is not None:

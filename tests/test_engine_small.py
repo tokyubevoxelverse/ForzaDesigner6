@@ -26,16 +26,22 @@ def test_engine_reduces_rms_over_first_shapes():
         max_resolution=64,
         max_threads=1,
         shape_types=["rotated_ellipse"],
+        compute_backend="cpu",
     )
     engine = Engine(target, EngineConfig(profile=profile, seed=12345))
     initial = engine.rms
     final_rms = None
+    events = []
     for ev in engine.run():
+        events.append(ev)
         if ev.kind == "done":
             final_rms = ev.rms
     assert final_rms is not None
     assert final_rms <= initial, f"RMS did not decrease: initial={initial}, final={final_rms}"
     assert len(engine.shapes) == profile.stop_at
+    search_events = [ev for ev in events if ev.kind == "search_started"]
+    assert search_events
+    assert search_events[0].message.startswith("Searching shape 1/10 on CPU with ")
 
 
 def test_engine_stops_when_requested():
