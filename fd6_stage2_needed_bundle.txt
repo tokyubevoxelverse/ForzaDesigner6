@@ -1,0 +1,2541 @@
+
+
+===== FILE: fd6/gui/settings_panel.py =====
+from __future__ import annotations
+
+from pathlib import Path
+
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
+
+from fd6.shapegen.profile import (
+    Profile,
+    load_profile_from_file,
+    list_bundled_profiles,
+)
+
+
+SHAPE_TYPE_CHOICES = [
+    ("rotated_ellipse", "Rotated Ellipse"),
+    ("rectangle", "Rectangle"),
+    ("rotated_rectangle", "Rotated Rectangle"),
+    ("ellipse", "Ellipse"),
+    ("circle", "Circle"),
+    ("triangle", "Triangle"),
+]
+
+
+COMPUTE_BACKEND_CHOICES = [
+    ("auto", "Auto (GPU if ready)"),
+    ("cpu", "CPU"),
+    ("gpu", "GPU (OpenCL — NVIDIA / AMD / Intel)"),
+]
+
+
+class SettingsPanel(QWidget):
+    """
+    Profile picker and generation settings.
+
+    logo_ultra is selected automatically at startup when the profile exists.
+    """
+
+    profile_changed = Signal(object)
+    start_clicked = Signal()
+    pause_clicked = Signal()
+    stop_clicked = Signal()
+    inject_clicked = Signal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        # ------------------------------------------------------------
+        # Profile
+        # ------------------------------------------------------------
+
+        prof_row = QHBoxLayout()
+
+        prof_label = QLabel("Profile:")
+        prof_label.setToolTip(
+            "A profile is a saved collection of generation settings."
+        )
+
+        prof_row.addWidget(prof_label)
+
+        self.profile_combo = QComboBox(self)
+        self.profile_combo.setToolTip(prof_label.toolTip())
+
+        self._populate_profiles()
+
+        self.profile_combo.currentIndexChanged.connect(
+            self._on_profile_changed
+        )
+
+        prof_row.addWidget(self.profile_combo, stretch=1)
+
+        layout.addLayout(prof_row)
+
+        # ------------------------------------------------------------
+        # Compute backend
+        # ------------------------------------------------------------
+
+        compute_row = QHBoxLayout()
+
+        compute_label = QLabel("Compute:")
+
+        compute_tip = (
+            "Which processor runs the shape search.\n\n"
+            "Auto: use GPU when supported, otherwise CPU.\n"
+            "CPU: always use the CPU generation path.\n"
+            "GPU: use the OpenCL GPU path when available.\n\n"
+            "Mixed logo shapes such as rectangles and triangles may require "
+            "the CPU generation path."
+        )
+
+        compute_label.setToolTip(compute_tip)
+
+        compute_row.addWidget(compute_label)
+
+        self.compute_backend = QComboBox(self)
+
+        for code, label in COMPUTE_BACKEND_CHOICES:
+            self.compute_backend.addItem(label, code)
+
+        self.compute_backend.setCurrentIndex(0)
+        self.compute_backend.setToolTip(compute_tip)
+
+        self.compute_backend.currentIndexChanged.connect(
+            self._on_adv_changed
+        )
+
+        compute_row.addWidget(
+            self.compute_backend,
+            stretch=1,
+        )
+
+        layout.addLayout(compute_row)
+
+        # ------------------------------------------------------------
+        # Advanced generation settings
+        # ------------------------------------------------------------
+
+        adv = QGroupBox("Advanced", self)
+        form = QFormLayout(adv)
+
+        self.stop_at = QSpinBox()
+        self.stop_at.setRange(10, 50000)
+        self.stop_at.setValue(3000)
+
+        self.stop_at.setToolTip(
+            "Maximum number of shapes generated. "
+            "For Forza vinyl groups, 3000 is normally the maximum useful "
+            "high-quality target."
+        )
+
+        self.random_samples = QSpinBox()
+        self.random_samples.setRange(10, 50000)
+        self.random_samples.setValue(20000)
+
+        self.random_samples.setToolTip(
+            "How many random candidate shapes are tested for each generated "
+            "shape. Higher values improve the search but greatly increase "
+            "generation time."
+        )
+
+        self.mutated_samples = QSpinBox()
+        self.mutated_samples.setRange(1, 20000)
+        self.mutated_samples.setValue(4000)
+
+        self.mutated_samples.setToolTip(
+            "How many refined mutations are tested after selecting a promising "
+            "candidate shape."
+        )
+
+        self.max_resolution = QSpinBox()
+        self.max_resolution.setRange(100, 8192)
+        self.max_resolution.setValue(2048)
+
+        self.max_resolution.setToolTip(
+            "Maximum processing resolution on the longest side. "
+            "2048 is recommended for the Logo Ultra profile."
+        )
+
+        self.max_threads = QSpinBox()
+        self.max_threads.setRange(0, 128)
+        self.max_threads.setValue(0)
+
+        self.max_threads.setToolTip(
+            "Maximum CPU thread count. "
+            "0 allows FD6 to choose automatically."
+        )
+
+        self.preview_every = QSpinBox()
+        self.preview_every.setRange(1, 500)
+        self.preview_every.setValue(25)
+
+        self.preview_every.setToolTip(
+            "How often FD6 refreshes the live preview. "
+            "This does not affect final generation quality."
+        )
+
+        for label_text, field in (
+            ("Stop at shapes", self.stop_at),
+            ("Random samples", self.random_samples),
+            ("Mutated samples", self.mutated_samples),
+            ("Max resolution (px)", self.max_resolution),
+            ("Threads (0=auto)", self.max_threads),
+            ("Preview every N", self.preview_every),
+        ):
+            row_label = QLabel(label_text, adv)
+            row_label.setToolTip(field.toolTip())
+
+            form.addRow(
+                row_label,
+                field,
+            )
+
+            field.valueChanged.connect(
+                self._on_adv_changed
+            )
+
+        layout.addWidget(adv)
+
+        # ------------------------------------------------------------
+        # Image options
+        # ------------------------------------------------------------
+
+        sticker_group = QGroupBox(
+            "Image options",
+            self,
+        )
+
+        sg_layout = QVBoxLayout(
+            sticker_group
+        )
+
+        self.sticker_mode_cb = QCheckBox(
+            "Add white background to transparent images",
+            sticker_group,
+        )
+
+        self.sticker_mode_cb.setChecked(True)
+
+        self.sticker_mode_cb.setToolTip(
+            "ON: transparent image areas become white.\n\n"
+            "OFF: transparent areas remain transparent. "
+            "This is normally preferable for isolated logos and stickers."
+        )
+
+        self.sticker_mode_cb.toggled.connect(
+            self._on_adv_changed
+        )
+
+        sg_layout.addWidget(
+            self.sticker_mode_cb
+        )
+
+        self.cap_2048_cb = QCheckBox(
+            "Experimental: cap generation at 2048px",
+            sticker_group,
+        )
+
+        # Enabled by default for the high-quality logo configuration.
+        self.cap_2048_cb.setChecked(True)
+
+        self.cap_2048_cb.setToolTip(
+            "When enabled, FD6 never processes the source above 2048px "
+            "on its longest side."
+        )
+
+        self.cap_2048_cb.toggled.connect(
+            self._on_adv_changed
+        )
+
+        sg_layout.addWidget(
+            self.cap_2048_cb
+        )
+
+        layout.addWidget(
+            sticker_group
+        )
+
+        # ------------------------------------------------------------
+        # Shape types
+        # ------------------------------------------------------------
+
+        supported_codes = {
+            "rotated_ellipse",
+            "rectangle",
+            "rotated_rectangle",
+            "ellipse",
+            "circle",
+            "triangle",
+        }
+
+        supported_tooltips = {
+            "rotated_ellipse": (
+                "Rotatable oval. Good for curves, rounded graphics, "
+                "faces and organic artwork."
+            ),
+            "rectangle": (
+                "Axis-aligned rectangle. Useful for horizontal and vertical "
+                "logo elements."
+            ),
+            "rotated_rectangle": (
+                "Rotatable rectangle. Excellent for lettering, sharp edges, "
+                "stripes and geometric graphics."
+            ),
+            "ellipse": (
+                "Non-rotated ellipse."
+            ),
+            "circle": (
+                "Circle primitive."
+            ),
+            "triangle": (
+                "Triangle primitive. Useful for sharp corners, angular "
+                "letters and geometric logos."
+            ),
+        }
+
+        types_group = QGroupBox(
+            "Shape types",
+            self,
+        )
+
+        types_group.setToolTip(
+            "Choose which primitive shapes FD6 may use while recreating "
+            "the source image."
+        )
+
+        tg_layout = QVBoxLayout(
+            types_group
+        )
+
+        self._shape_checks: dict[str, QCheckBox] = {}
+
+        for code, label in SHAPE_TYPE_CHOICES:
+            cb = QCheckBox(
+                label,
+                types_group,
+            )
+
+            cb.setEnabled(
+                code in supported_codes
+            )
+
+            cb.setChecked(
+                code in {
+                    "rotated_ellipse",
+                    "rotated_rectangle",
+                    "triangle",
+                }
+            )
+
+            cb.setToolTip(
+                supported_tooltips.get(
+                    code,
+                    "",
+                )
+            )
+
+            cb.stateChanged.connect(
+                self._on_adv_changed
+            )
+
+            tg_layout.addWidget(cb)
+
+            self._shape_checks[code] = cb
+
+        layout.addWidget(
+            types_group
+        )
+
+        # ------------------------------------------------------------
+        # Generation buttons
+        # ------------------------------------------------------------
+
+        btn_row = QHBoxLayout()
+
+        self.start_btn = QPushButton("Start")
+        self.start_btn.setMinimumHeight(36)
+
+        self.start_btn.setToolTip(
+            "Begin generating the image."
+        )
+
+        self.pause_btn = QPushButton("Pause")
+        self.pause_btn.setCheckable(True)
+        self.pause_btn.setEnabled(False)
+
+        self.pause_btn.setToolTip(
+            "Pause or resume generation."
+        )
+
+        self.stop_btn = QPushButton("Stop")
+        self.stop_btn.setEnabled(False)
+
+        self.stop_btn.setToolTip(
+            "Stop generation early."
+        )
+
+        self.start_btn.clicked.connect(
+            self.start_clicked.emit
+        )
+
+        self.pause_btn.clicked.connect(
+            self.pause_clicked.emit
+        )
+
+        self.stop_btn.clicked.connect(
+            self.stop_clicked.emit
+        )
+
+        btn_row.addWidget(
+            self.start_btn
+        )
+
+        btn_row.addWidget(
+            self.pause_btn
+        )
+
+        btn_row.addWidget(
+            self.stop_btn
+        )
+
+        layout.addLayout(
+            btn_row
+        )
+
+        # ------------------------------------------------------------
+        # Target game
+        # ------------------------------------------------------------
+
+        from fd6.inject.game_profiles import list_profiles
+
+        target_row = QHBoxLayout()
+
+        target_label = QLabel("Target:")
+
+        target_label.setToolTip(
+            "Select the Forza title that should receive the generated vinyl."
+        )
+
+        target_row.addWidget(
+            target_label
+        )
+
+        self.target_combo = QComboBox(self)
+
+        self._target_profiles = list_profiles()
+
+        for prof in self._target_profiles:
+            self.target_combo.addItem(
+                prof.label,
+                prof.key,
+            )
+
+        # FH6 remains the default target.
+        self.target_combo.setCurrentIndex(0)
+
+        self.target_combo.setToolTip(
+            "Forza Horizon 6 is the primary validated target."
+        )
+
+        self.target_combo.currentIndexChanged.connect(
+            self._on_target_changed
+        )
+
+        target_row.addWidget(
+            self.target_combo,
+            stretch=1,
+        )
+
+        layout.addLayout(
+            target_row
+        )
+
+        # ------------------------------------------------------------
+        # Injection button
+        # ------------------------------------------------------------
+
+        self.inject_btn = QPushButton(
+            "Inject into Forza Horizon 6"
+        )
+
+        self.inject_btn.setEnabled(False)
+
+        self.inject_btn.setToolTip(
+            "Inject the most recently generated or loaded shape JSON "
+            "into the currently open Forza vinyl group."
+        )
+
+        self.inject_btn.clicked.connect(
+            self.inject_clicked.emit
+        )
+
+        layout.addWidget(
+            self.inject_btn
+        )
+
+        layout.addStretch()
+
+        # Load selected/default profile into controls.
+        self._on_profile_changed(
+            self.profile_combo.currentIndex()
+        )
+
+    # ------------------------------------------------------------
+    # Target
+    # ------------------------------------------------------------
+
+    def selected_target_profile_key(self) -> str:
+        data = self.target_combo.currentData()
+
+        return str(data) if data else "fh6"
+
+    def _on_target_changed(self, idx: int) -> None:
+        if idx < 0 or idx >= len(self._target_profiles):
+            return
+
+        prof = self._target_profiles[idx]
+
+        clean_label = prof.label.replace(
+            " (BETA)",
+            "",
+        )
+
+        self.inject_btn.setText(
+            f"Inject into {clean_label}"
+        )
+
+        if prof.beta:
+            tooltip = (
+                f"BETA target: {prof.label}.\n\n"
+                f"{prof.beta_note}\n\n"
+                "Make sure the in-game vinyl editor is open before injection."
+            )
+        else:
+            tooltip = (
+                "Inject the most recently generated or loaded JSON into the "
+                "selected Forza title."
+            )
+
+        self.inject_btn.setToolTip(
+            tooltip
+        )
+
+    # ------------------------------------------------------------
+    # Profiles
+    # ------------------------------------------------------------
+
+    def _populate_profiles(self) -> None:
+        self.profile_combo.clear()
+
+        paths = list_bundled_profiles()
+
+        for path in paths:
+            self.profile_combo.addItem(
+                path.stem,
+                str(path),
+            )
+
+        if self.profile_combo.count() == 0:
+            self.profile_combo.addItem(
+                "default",
+                "",
+            )
+
+            return
+
+        # --------------------------------------------------------
+        # DEFAULT PROFILE
+        # --------------------------------------------------------
+        #
+        # Select logo_ultra automatically whenever it exists.
+        #
+        # --------------------------------------------------------
+
+        default_index = self.profile_combo.findText(
+            "logo_ultra"
+        )
+
+        if default_index >= 0:
+            self.profile_combo.setCurrentIndex(
+                default_index
+            )
+        else:
+            self.profile_combo.setCurrentIndex(0)
+
+    def _on_profile_changed(self, idx: int) -> None:
+        if idx < 0:
+            return
+
+        path = self.profile_combo.itemData(idx)
+
+        if not path:
+            return
+
+        try:
+            prof = load_profile_from_file(
+                path
+            )
+        except Exception:
+            return
+
+        widgets = (
+            self.stop_at,
+            self.random_samples,
+            self.mutated_samples,
+            self.max_resolution,
+            self.max_threads,
+            self.preview_every,
+        )
+
+        for widget in widgets:
+            widget.blockSignals(True)
+
+        self.stop_at.setValue(
+            prof.stop_at
+        )
+
+        self.random_samples.setValue(
+            prof.random_samples
+        )
+
+        self.mutated_samples.setValue(
+            prof.mutated_samples
+        )
+
+        self.max_resolution.setValue(
+            prof.max_resolution
+        )
+
+        self.max_threads.setValue(
+            prof.max_threads
+        )
+
+        self.preview_every.setValue(
+            prof.preview_every
+        )
+
+        for widget in widgets:
+            widget.blockSignals(False)
+
+        # --------------------------------------------------------
+        # Shape types
+        # --------------------------------------------------------
+
+        for code, cb in self._shape_checks.items():
+            cb.blockSignals(True)
+
+            cb.setChecked(
+                code in prof.shape_types
+            )
+
+            cb.blockSignals(False)
+
+        # --------------------------------------------------------
+        # Compute backend
+        # --------------------------------------------------------
+
+        wanted_backend = getattr(
+            prof,
+            "compute_backend",
+            "auto",
+        )
+
+        compute_index = self.compute_backend.findData(
+            wanted_backend
+        )
+
+        if compute_index >= 0:
+            self.compute_backend.blockSignals(True)
+
+            self.compute_backend.setCurrentIndex(
+                compute_index
+            )
+
+            self.compute_backend.blockSignals(False)
+
+        self.profile_changed.emit(
+            self.build_profile()
+        )
+
+    # ------------------------------------------------------------
+    # Advanced controls
+    # ------------------------------------------------------------
+
+    def _on_adv_changed(self, *_args) -> None:
+        self.profile_changed.emit(
+            self.build_profile()
+        )
+
+    # ------------------------------------------------------------
+    # Build current profile
+    # ------------------------------------------------------------
+
+    def build_profile(self) -> Profile:
+        idx = self.profile_combo.currentIndex()
+
+        path = self.profile_combo.itemData(idx) or ""
+
+        base = Profile(
+            name=self.profile_combo.itemText(idx) or "custom"
+        )
+
+        if path:
+            try:
+                base = load_profile_from_file(
+                    path
+                )
+            except Exception:
+                pass
+
+        base.stop_at = self.stop_at.value()
+
+        base.random_samples = self.random_samples.value()
+
+        base.mutated_samples = self.mutated_samples.value()
+
+        base.max_resolution = self.max_resolution.value()
+
+        if self.cap_2048_cb.isChecked():
+            base.max_resolution = min(
+                base.max_resolution,
+                2048,
+            )
+
+        base.max_threads = self.max_threads.value()
+
+        base.preview_every = self.preview_every.value()
+
+        selected_shapes = [
+            code
+            for code, cb in self._shape_checks.items()
+            if cb.isChecked()
+        ]
+
+        if not selected_shapes:
+            selected_shapes = [
+                "rotated_ellipse"
+            ]
+
+        base.shape_types = selected_shapes
+
+        base.compute_backend = str(
+            self.compute_backend.currentData()
+            or "auto"
+        )
+
+        return base
+
+    # ------------------------------------------------------------
+    # Running state
+    # ------------------------------------------------------------
+
+    def set_running(self, running: bool) -> None:
+        self.start_btn.setEnabled(
+            not running
+        )
+
+        self.pause_btn.setEnabled(
+            running
+        )
+
+        self.stop_btn.setEnabled(
+            running
+        )
+
+
+===== FILE: fd6/gui/main_window.py =====
+from __future__ import annotations
+
+from pathlib import Path
+
+from PySide6.QtCore import Qt, QThread, QObject, Signal, QTimer
+from PySide6.QtGui import QAction, QActionGroup, QKeySequence
+from PySide6.QtWidgets import (
+    QHBoxLayout, QMainWindow, QMessageBox, QScrollArea, QSplitter, QStackedWidget, QStatusBar, QVBoxLayout, QWidget
+)
+
+from fd6.gui.ac_settings_panel import ACSettingsPanel
+from fd6.gui.brand_banner import BrandBanner, badge_path
+from fd6.gui.game_suite_dialog import GameSuiteDialog
+from fd6.gui.preview_panel import PreviewPanel
+from fd6.gui.texture_preview_panel import TexturePreviewPanel
+from fd6.gui.themes import THEMES, apply_theme, saved_theme_name, badge_filename_for_theme
+from fd6.gui.queue_panel import QueuePanel
+from fd6.gui.settings_panel import SettingsPanel
+from fd6.gui.upload_panel import UploadPanel
+from fd6.shapegen.profile import Profile
+from fd6.shapegen.worker import GenerationWorker
+from fd6.inject.fh6_injector import patterns_are_populated, FH6_TARGET_BUILD
+from fd6.suite import SuiteMode, SUITE_DISPLAY, saved_suite_mode, save_suite_mode
+import fd6
+
+
+class _MembershipWorker(QObject):
+    """Background check: is the linked Discord user a member of the FD6 server?
+    Used to gate the automatic launch update-panel without stalling startup."""
+    result = Signal(bool)
+
+    def run(self) -> None:
+        from fd6.gui.startup_log import log as _log
+        _log("membership worker: start")
+        try:
+            from fd6.gui import discord_link
+            ok = discord_link.is_member_of_fd6_guild()
+        except Exception:
+            ok = False
+        _log(f"membership worker: done ({ok})")
+        self.result.emit(ok)
+
+
+class MainWindow(QMainWindow):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle("Forza Designer 6+ — Inject custom decals and vinyls into various racing titles")
+        self.resize(1280, 760)
+        self.setStatusBar(QStatusBar(self))
+        self._apply_dark_palette()
+
+        # Suite mode — read persisted choice; default Forza on first launch.
+        # The actual popup (if any) fires after window is shown, see show() override.
+        self._suite_mode: SuiteMode = saved_suite_mode() or SuiteMode.FORZA
+        self._suite_first_launch: bool = saved_suite_mode() is None
+
+        # Panels — Forza panels existed in v0.3.0; AC panels are new for v0.3.5.
+        self.upload = UploadPanel(self)
+        self.preview = PreviewPanel(self)              # Forza preview (live shape gen)
+        self.ac_preview = TexturePreviewPanel(self)    # AC preview (cycling slots)
+        self.queue = QueuePanel(self)
+        self.settings_panel = SettingsPanel(self)      # Forza settings (geometrize knobs)
+        self.ac_settings = ACSettingsPanel(self)       # AC settings (car/slot/resolution)
+
+        # Stacked widgets so suite switch is a one-call swap.
+        self.preview_stack = QStackedWidget(self)
+        self.preview_stack.addWidget(self.preview)     # index 0 — Forza
+        self.preview_stack.addWidget(self.ac_preview)  # index 1 — AC
+        # Wrap each settings page in a scroll area. The panels are tall (the AC
+        # panel is ~880px); without scrolling, the QStackedWidget takes the
+        # height of its TALLEST page as a hard minimum, forcing the whole window
+        # taller than the screen (bottom clipped off). Scroll areas let the
+        # window be shorter than the panel and scroll instead.
+        self.settings_stack = QStackedWidget(self)
+        self.settings_stack.addWidget(self._scrollable(self.settings_panel))  # index 0 — Forza
+        self.settings_stack.addWidget(self._scrollable(self.ac_settings))     # index 1 — AC
+
+        # Layout: [upload | center (preview-stack over queue) | settings-stack]
+        center = QWidget(self)
+        center_layout = QVBoxLayout(center)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        vsplit = QSplitter(Qt.Vertical, center)
+        vsplit.addWidget(self.preview_stack)
+        vsplit.addWidget(self.queue)
+        vsplit.setSizes([520, 220])
+        center_layout.addWidget(vsplit)
+
+        hsplit = QSplitter(Qt.Horizontal, self)
+        hsplit.addWidget(self._scrollable(self.upload))
+        hsplit.addWidget(center)
+        hsplit.addWidget(self.settings_stack)
+        hsplit.setSizes([240, 760, 280])
+        self.setCentralWidget(hsplit)
+
+        # Wire signals — Forza paths (unchanged)
+        self.upload.files_selected.connect(self._on_files_selected)
+        self.upload.json_loaded.connect(self._on_json_loaded_for_preview)
+        self.upload.download_json_requested.connect(self._on_download_json)
+        self.queue.download_requested.connect(self._on_queue_download_json)
+        self.settings_panel.start_clicked.connect(self._start_next)
+        self.settings_panel.pause_clicked.connect(self._toggle_pause)
+        self.settings_panel.stop_clicked.connect(self._stop_current)
+        self.settings_panel.inject_clicked.connect(self._on_inject_clicked)
+        # AC path
+        self.ac_settings.export_clicked.connect(self._on_ac_export_clicked)
+
+        # Worker state
+        self._worker: GenerationWorker | None = None
+        self._thread: QThread | None = None
+        self._current_path: Path | None = None
+        self._current_uid: int | None = None  # queue entry uid currently generating
+        self._current_profile: Profile | None = None
+        self._last_finished_json: Path | None = None  # tracks most recent completed run for Download button
+        self._loaded_json_path: Path | None = None    # JSON loaded via Upload JSON (ready to inject)
+        self._inject_worker = None  # InjectionWorker (set when injecting)
+        self._inject_thread: QThread | None = None
+        self._update_dialog = None  # centered update-check panel (one at a time)
+        self._update_checked_this_launch = False
+        self._member_thread: QThread | None = None
+        self._member_worker = None
+        self._discord_prompt_shown = False
+        # Discord Rich Presence — start now if the user enabled it previously.
+        from fd6.gui.startup_log import log as _log
+        _log("init: before RichPresence")
+        from fd6.gui import discord_link
+        self._rich_presence = discord_link.RichPresence()
+        if discord_link.rich_presence_enabled():
+            self._rich_presence.start()
+        _log("init: after RichPresence.start")
+
+        # Menus / shortcuts
+        self._build_menus()
+
+        # Wire FH6 inject gating
+        self._refresh_inject_button()
+
+        # Floating brand banner in bottom-left (toggleable)
+        self.brand_banner = BrandBanner(self)
+        self.brand_banner.show()
+        # Make sure the brand banner + window icon match the persisted theme
+        # right at construction time (was previously only synced on theme change,
+        # so launches would briefly show the Default Pink badge for non-Default
+        # themes).
+        from PySide6.QtGui import QIcon
+        _saved_theme = saved_theme_name()
+        _bp = badge_path(badge_filename_for_theme(_saved_theme))
+        if _bp:
+            self.setWindowIcon(QIcon(str(_bp)))
+            self.brand_banner.set_badge(_bp)
+
+        # Decorative particle overlay (theme-colored, transparent, click-through).
+        # Constructed AFTER brand_banner so we can raise it above everything.
+        from fd6.gui.particles import ParticleOverlay
+        self.particles = ParticleOverlay(self)
+        _pal = THEMES.get(_saved_theme, THEMES["Default"])
+        self.particles.set_theme_colors(
+            _pal["particle_1"], _pal["particle_2"], _pal["particle_3"],
+        )
+        self.particles.reposition()
+        # Register a live exclude-rect provider so the rect stays correct even
+        # when the user drags the splitter (which doesn't trigger MainWindow's
+        # resizeEvent). Provider is called every particle paintEvent.
+        self.particles.set_exclude_provider(self._compute_particle_exclude_rect)
+        # Still call the push path once so the cached fallback is populated.
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, self._sync_particle_exclude_rect)
+        # Initial state of menu actions (built in _build_menus before this point)
+        if hasattr(self, "_particles_enabled_act"):
+            self._particles_enabled_act.setChecked(self.particles.enabled())
+            self._sync_particle_count_check(self.particles.count())
+
+        # Apply the persisted suite mode now (after menus + panels exist).
+        # The first-launch popup is deferred until showEvent fires — otherwise
+        # it appears OVER the splash screen and blocks the user from skipping it.
+        self._apply_suite_mode(self._suite_mode)
+        self._suite_popup_shown_this_session = False
+
+        # Background music: 3 looping OpenSource tracks. Construct now (cheap),
+        # but DEFER starting until start_music() is called from app.py after the
+        # splash finishes. Two simultaneous QMediaPlayer instances racing during
+        # splash teardown was causing GUI crashes on skip / video end.
+        from fd6.gui.music import MusicPlayer
+        self.music = MusicPlayer(self)
+        self.music.state_changed.connect(self._on_music_state)
+        self.music.muted_changed.connect(self._on_music_muted)
+        self.music.volume_changed.connect(self._on_music_volume)
+        self.music.track_changed.connect(
+            lambda name: self.statusBar().showMessage(f"♪ {name}", 4000)
+        )
+        if not self.music.has_tracks():
+            for act in (self._music_play_act, self._music_mute_act):
+                act.setEnabled(False)
+            for act in self._music_vol_group.actions():
+                act.setEnabled(False)
+
+    def check_for_updates(self, force: bool = False) -> None:
+        """Discord-gated in-app updates.
+
+        The in-app updater (both the automatic launch check AND the manual
+        Help -> Check for updates) is GATED behind linking Discord AND being a
+        member of the FD6 server. Users who don't link must update manually from
+        the GitHub releases page — this keeps the community in the Discord.
+
+        `force=True` is the MANUAL path: it explains the gate / offers to link /
+        points to GitHub when the user isn't eligible. `force=False` is the
+        silent AUTOMATIC launch path: it just does nothing when not eligible.
+        """
+        from fd6.gui.startup_log import log as _log
+        _log(f"check_for_updates(force={force})")
+        if getattr(self, "_update_dialog", None) is not None:
+            return  # one already open
+
+        from fd6.gui import discord_link
+        if not force:
+            if self._update_checked_this_launch:
+                return
+            self._update_checked_this_launch = True
+
+        # GATE 1 — must be linked.
+        if not discord_link.is_linked():
+            _log("update: not linked")
+            if force:
+                self._prompt_link_required_for_updates()
+            return
+
+        # GATE 2 — must be a member of the FD6 server (verified off-thread so a
+        # slow/offline call never stalls the GUI). The result handler opens the
+        # update panel only if confirmed; on the manual path it explains misses.
+        _log("update: linked, starting membership check")
+        self._start_auto_update_membership_check(manual=force)
+
+    def _prompt_link_required_for_updates(self) -> None:
+        """Manual update check while NOT linked: explain the gate, offer to link,
+        or send them to GitHub for a manual download."""
+        from fd6.gui import discord_link
+        box = QMessageBox(self)
+        box.setWindowTitle("Updates require Discord")
+        box.setIcon(QMessageBox.Information)
+        box.setText(
+            "In-app updates are available to members of the FD6 Discord server.\n\n"
+            "Link your Discord and join the server to enable automatic in-app "
+            "updates — or download the latest version manually from GitHub."
+        )
+        link_btn = box.addButton("Link Discord", QMessageBox.AcceptRole)
+        gh_btn = box.addButton("Open GitHub releases", QMessageBox.ActionRole)
+        box.addButton("Close", QMessageBox.RejectRole)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is link_btn:
+            self._open_discord_settings()
+        elif clicked is gh_btn:
+            from PySide6.QtGui import QDesktopServices
+            from PySide6.QtCore import QUrl
+            from fd6.gui import updater
+            QDesktopServices.openUrl(QUrl(updater.RELEASES_PAGE))
+
+    def _open_update_dialog(self) -> None:
+        from fd6.gui.update_dialog import UpdateDialog
+        if getattr(self, "_update_dialog", None) is not None:
+            return
+        dlg = UpdateDialog(self)
+        self._update_dialog = dlg
+        dlg.quit_requested.connect(self._on_update_quit)
+        dlg.finished.connect(lambda _r: setattr(self, "_update_dialog", None))
+        dlg.show()
+
+    def _open_update_dialog(self) -> None:
+        from fd6.gui.update_dialog import UpdateDialog
+        if getattr(self, "_update_dialog", None) is not None:
+            return
+        dlg = UpdateDialog(self)
+        self._update_dialog = dlg
+        dlg.quit_requested.connect(self._on_update_quit)
+        dlg.finished.connect(lambda _r: setattr(self, "_update_dialog", None))
+        dlg.show()
+
+    def _start_auto_update_membership_check(self, manual: bool = False) -> None:
+        """Background-verify FD6-server membership, then open the update panel
+        only if confirmed. On the MANUAL path, a non-member / offline result is
+        explained to the user; on the automatic path it's silent."""
+        self._member_check_manual = manual
+        self._member_thread = QThread(self)
+        self._member_worker = _MembershipWorker()
+        self._member_worker.moveToThread(self._member_thread)
+        self._member_thread.started.connect(self._member_worker.run)
+        # CRITICAL: connect to a BOUND METHOD of self (GUI-thread affinity) so
+        # Qt delivers the result via a QUEUED connection on the GUI thread. A
+        # bare closure here would run in the WORKER thread and then call
+        # thread.wait() on itself → deadlock (the second-launch freeze).
+        self._member_worker.result.connect(self._on_membership_result)
+        self._member_thread.start()
+
+    def _on_membership_result(self, is_member: bool) -> None:
+        """Runs on the GUI thread (queued from the worker). Safe to touch the
+        thread object and open dialogs here."""
+        from fd6.gui.startup_log import log as _log
+        _log(f"membership result on GUI thread ({is_member})")
+        if self._member_thread is not None:
+            self._member_thread.quit()
+            self._member_thread.wait(2000)
+            self._member_thread = None
+            self._member_worker = None
+        manual = getattr(self, "_member_check_manual", False)
+        if is_member:
+            self._open_update_dialog()
+        elif manual:
+            # Linked but not in the server (or couldn't verify) — explain + offer
+            # to join / go to GitHub. Silent on the automatic path.
+            from fd6.gui import discord_link, updater
+            box = QMessageBox(self)
+            box.setWindowTitle("Join the FD6 server for updates")
+            box.setIcon(QMessageBox.Information)
+            box.setText(
+                "In-app updates are for members of the FD6 Discord server.\n\n"
+                "You're linked, but you don't appear to be in the server (or we "
+                "couldn't reach Discord). Join the server to enable in-app "
+                "updates — or download the latest version manually from GitHub."
+            )
+            join_btn = box.addButton("Join FD6 Discord", QMessageBox.AcceptRole)
+            gh_btn = box.addButton("Open GitHub releases", QMessageBox.ActionRole)
+            box.addButton("Close", QMessageBox.RejectRole)
+            box.exec()
+            from PySide6.QtGui import QDesktopServices
+            from PySide6.QtCore import QUrl
+            if box.clickedButton() is join_btn:
+                QDesktopServices.openUrl(QUrl(discord_link.DISCORD_INVITE_URL))
+            elif box.clickedButton() is gh_btn:
+                QDesktopServices.openUrl(QUrl(updater.RELEASES_PAGE))
+
+    def _on_update_quit(self) -> None:
+        from PySide6.QtWidgets import QApplication
+        QApplication.instance().quit()
+
+    def run_startup_flow(self) -> None:
+        """Deterministic post-splash startup: show the version-keyed welcome
+        panel (first run / new version), else run the gated auto-update check.
+
+        Called explicitly from app.py once the main window is shown — this is
+        more reliable than showEvent in the frozen --windowed build. Idempotent:
+        a second call in the same session is a no-op.
+        """
+        if getattr(self, "_startup_flow_done", False):
+            return
+        self._startup_flow_done = True
+        from fd6.gui.startup_log import log as _log
+        _log("run_startup_flow")
+        from PySide6.QtCore import QSettings
+        from fd6.gui import discord_link
+        s = QSettings("FD6", "Forza Designer 6")
+        welcome_key = f"discord/welcome_shown_{fd6.__version__}"
+        # Only show the welcome / "link Discord" panel to users who HAVEN'T linked
+        # yet (once per version). Already-linked users shouldn't be nagged to link
+        # on every new version — go straight to the gated auto-update check.
+        if not discord_link.is_linked() and not s.value(welcome_key):
+            _log("startup: scheduling welcome (unlinked)")
+            QTimer.singleShot(500, self._show_welcome)
+        elif not self._update_checked_this_launch:
+            _log("startup: scheduling gated update check")
+            QTimer.singleShot(400, self.check_for_updates)
+
+    def _show_welcome(self) -> None:
+        """First-run welcome panel: Link Discord / Check for updates / Skip."""
+        if getattr(self, "_welcome_open", False):
+            return
+        self._welcome_open = True
+        self._discord_prompt_shown = True
+        from PySide6.QtCore import QSettings
+        _s = QSettings("FD6", "Forza Designer 6")
+        _s.setValue(f"discord/welcome_shown_{fd6.__version__}", "1"); _s.sync()
+        from fd6.gui.welcome_dialog import WelcomeDialog
+        dlg = WelcomeDialog(self)
+        dlg.link_discord_requested.connect(lambda: self._open_discord_settings(first_launch=True))
+        dlg.check_updates_requested.connect(lambda: self.check_for_updates(force=True))
+        dlg.exec()
+        self._welcome_open = False
+
+    def _open_discord_settings(self, first_launch: bool = False) -> None:
+        from fd6.gui.discord_dialog import DiscordSettingsDialog
+        dlg = DiscordSettingsDialog(self, first_launch=first_launch)
+        dlg.rich_presence_changed.connect(self._on_rich_presence_toggled)
+        dlg.exec()
+
+    def _on_rich_presence_toggled(self, on: bool) -> None:
+        rp = getattr(self, "_rich_presence", None)
+        if rp is None:
+            return
+        if on:
+            rp.start()
+        else:
+            rp.stop()
+
+    def start_music(self) -> None:
+        """Begin background music. Call once, after the splash has finished, to
+        avoid two QMediaPlayer audio streams colliding during splash teardown."""
+        if not getattr(self, "music", None) or not self.music.has_tracks():
+            return
+        if getattr(self, "_music_started", False):
+            return
+        self._music_started = True
+        self.music.start()
+        self._music_play_act.setChecked(self.music.is_playing())
+        self._music_mute_act.setChecked(self.music.muted())
+        self._sync_volume_check(self.music.volume())
+
+    def _apply_dark_palette(self) -> None:
+        # Theme styling now lives in fd6/gui/themes.py and is applied at QApplication level.
+        # We just trigger the saved theme here in case MainWindow is constructed before app-level apply.
+        from PySide6.QtWidgets import QApplication
+        apply_theme(QApplication.instance(), saved_theme_name())
+
+    def _scrollable(self, widget: QWidget) -> QScrollArea:
+        """Wrap `widget` in a vertical scroll area so a tall panel never forces
+        the window taller than the screen. Width tracks the viewport (no
+        horizontal scrollbar); only the vertical bar appears when needed."""
+        sa = QScrollArea(self)
+        sa.setWidgetResizable(True)
+        sa.setFrameShape(QScrollArea.NoFrame)
+        sa.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        sa.setWidget(widget)
+        return sa
+
+    def _build_menus(self) -> None:
+        mbar = self.menuBar()
+        file_menu = mbar.addMenu("&File")
+
+        open_act = QAction("&Upload Image…", self)
+        open_act.setShortcut(QKeySequence("Ctrl+O"))
+        open_act.triggered.connect(self.upload._on_upload_clicked)
+        file_menu.addAction(open_act)
+
+        quit_act = QAction("&Quit", self)
+        quit_act.setShortcut(QKeySequence("Ctrl+Q"))
+        quit_act.triggered.connect(self.close)
+        file_menu.addAction(quit_act)
+
+        view_menu = mbar.addMenu("&View")
+        theme_menu = view_menu.addMenu("&Theme")
+        from PySide6.QtGui import QActionGroup
+        self._theme_group = QActionGroup(self)
+        self._theme_group.setExclusive(True)
+        current_theme = saved_theme_name()
+        for theme_name in THEMES.keys():
+            act = QAction(theme_name, self, checkable=True)
+            act.setChecked(theme_name == current_theme)
+            act.triggered.connect(lambda _checked, n=theme_name: self._set_theme(n))
+            self._theme_group.addAction(act)
+            theme_menu.addAction(act)
+
+        # --- Music submenu (3 looping OpenSource tracks; MUTED by default, ----
+        # --- 0.3 vol once unmuted) -------------------------------------------
+        view_menu.addSeparator()
+        music_menu = view_menu.addMenu("&Music")
+        self._music_play_act = QAction("&Play / Pause", self, checkable=True)
+        self._music_play_act.setShortcut("Ctrl+M")
+        self._music_play_act.triggered.connect(self._music_toggle_play)
+        music_menu.addAction(self._music_play_act)
+        self._music_mute_act = QAction("M&ute", self, checkable=True)
+        self._music_mute_act.triggered.connect(self._music_toggle_mute)
+        music_menu.addAction(self._music_mute_act)
+        next_act = QAction("&Next track", self)
+        next_act.setShortcut("Ctrl+Shift+M")
+        next_act.triggered.connect(self._music_next)
+        music_menu.addAction(next_act)
+        music_menu.addSeparator()
+        # Volume submenu (10 % steps)
+        vol_menu = music_menu.addMenu("&Volume")
+        self._music_vol_group = QActionGroup(self)
+        self._music_vol_group.setExclusive(True)
+        for pct in (0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100):
+            a = QAction(f"{pct}%", self, checkable=True)
+            a.triggered.connect(lambda _c, p=pct: self._music_set_volume(p / 100.0))
+            self._music_vol_group.addAction(a)
+            vol_menu.addAction(a)
+
+        # --- Fonts submenu (Default + every bundled TTF/OTF) ------------------
+        view_menu.addSeparator()
+        fonts_menu = view_menu.addMenu("F&onts")
+        from fd6.gui.fonts import (
+            available_family_names as _font_names, saved_font_name as _saved_font,
+        )
+        self._font_group = QActionGroup(self)
+        self._font_group.setExclusive(True)
+        current_font = _saved_font()
+        for fname in _font_names():
+            a = QAction(fname, self, checkable=True)
+            a.setChecked(fname == current_font)
+            a.triggered.connect(lambda _c, name=fname: self._on_font_pick(name))
+            self._font_group.addAction(a)
+            fonts_menu.addAction(a)
+
+        # --- Localization submenu (v0.4.0 scaffolding — translations land later) ---
+        # English is the only working option right now; the rest are listed
+        # disabled with a "(coming soon)" suffix so the menu telegraphs the
+        # roadmap. Translation strings + Qt linguist .qm files will follow in a
+        # subsequent release.
+        loc_menu = view_menu.addMenu("&Localization")
+        self._loc_group = QActionGroup(self)
+        self._loc_group.setExclusive(True)
+        loc_options = [
+            ("English", True),
+            ("Spanish (Español)", False),
+            ("French (Français)", False),
+            ("German (Deutsch)", False),
+            ("Italian (Italiano)", False),
+            ("Portuguese (Português)", False),
+            ("Dutch (Nederlands)", False),
+            ("Polish (Polski)", False),
+            ("Russian (Русский)", False),
+            ("Japanese (日本語)", False),
+            ("Korean (한국어)", False),
+            ("Simplified Chinese (简体中文)", False),
+            ("Traditional Chinese (繁體中文)", False),
+            ("Arabic (العربية)", False),
+        ]
+        for label, enabled in loc_options:
+            act = QAction(label if enabled else f"{label} (coming soon)", self, checkable=True)
+            act.setEnabled(enabled)
+            act.setChecked(enabled)
+            self._loc_group.addAction(act)
+            loc_menu.addAction(act)
+
+        # --- Customizations submenu (panel-swap toggles, persisted) ----------
+        view_menu.addSeparator()
+        custom_menu = view_menu.addMenu("&Customizations")
+
+        # Game-suite submenu — radio-group of FORZA / AC / NFS-coming / CREW-coming.
+        # Switches the active suite without restarting; selection persists.
+        suite_menu = custom_menu.addMenu("Change Game &Suite")
+        self._suite_action_group = QActionGroup(self)
+        self._suite_action_group.setExclusive(True)
+        self._suite_actions: dict[SuiteMode, QAction] = {}
+        for mode in (SuiteMode.FORZA, SuiteMode.AC, SuiteMode.NFS, SuiteMode.CREW):
+            meta = SUITE_DISPLAY[mode]
+            label = meta["label"] + ("" if meta["enabled"] else " (Coming Soon)")
+            act = QAction(label, self, checkable=True)
+            act.setEnabled(bool(meta["enabled"]))
+            act.setChecked(mode == self._suite_mode)
+            act.triggered.connect(lambda checked=False, m=mode: self._on_suite_menu_selected(m))
+            self._suite_action_group.addAction(act)
+            suite_menu.addAction(act)
+            self._suite_actions[mode] = act
+        custom_menu.addSeparator()
+
+        self._swap_recents_act = QAction("&Swap recents with image searcher", self, checkable=True)
+        self._swap_recents_act.setStatusTip(
+            "Replace the Recent files list with a Google-style image search panel "
+            "that downloads PNGs straight into the generation queue."
+        )
+        from PySide6.QtCore import QSettings as _QS
+        _cs = _QS("FD6", "Forza Designer 6")
+        _cs.beginGroup("customizations")
+        _init_swap = _cs.value("swap_recents_with_image_searcher", False, type=bool)
+        _cs.endGroup()
+        self._swap_recents_act.setChecked(_init_swap)
+        self._swap_recents_act.triggered.connect(self._on_swap_recents_toggled)
+        custom_menu.addAction(self._swap_recents_act)
+        # Apply the persisted state to the upload panel right away
+        if hasattr(self, "upload"):
+            self.upload.set_use_image_searcher(_init_swap)
+
+        # --- Particles submenu (theme-colored animated overlay) --------------
+        view_menu.addSeparator()
+        particles_menu = view_menu.addMenu("&Particles")
+        self._particles_enabled_act = QAction("&Show particles", self, checkable=True)
+        self._particles_enabled_act.triggered.connect(self._on_particles_toggle)
+        particles_menu.addAction(self._particles_enabled_act)
+        particles_menu.addSeparator()
+        density_menu = particles_menu.addMenu("&Density")
+        self._particle_count_group = QActionGroup(self)
+        self._particle_count_group.setExclusive(True)
+        from fd6.gui.particles import COUNT_OPTIONS
+        for n in COUNT_OPTIONS:
+            label = "Off (0)" if n == 0 else f"{n} particles"
+            a = QAction(label, self, checkable=True)
+            a.triggered.connect(lambda _c, count=n: self._on_particles_count(count))
+            self._particle_count_group.addAction(a)
+            density_menu.addAction(a)
+
+        fh6_menu = mbar.addMenu("F&H6")
+        status_act = QAction("FH6 &Status…", self)
+        status_act.triggered.connect(self._show_fh6_status)
+        fh6_menu.addAction(status_act)
+        discovery_act = QAction("&Discovery Workflow…", self)
+        discovery_act.triggered.connect(self._show_discovery_help)
+        fh6_menu.addAction(discovery_act)
+        fh6_menu.addSeparator()
+        reload_act = QAction("&Reload Patterns", self)
+        reload_act.triggered.connect(self._refresh_inject_button)
+        fh6_menu.addAction(reload_act)
+
+        help_menu = mbar.addMenu("&Help")
+        update_act = QAction("Check for &updates…", self)
+        update_act.triggered.connect(lambda: self.check_for_updates(force=True))
+        help_menu.addAction(update_act)
+        discord_act = QAction("&Discord & auto-updates…", self)
+        discord_act.triggered.connect(self._open_discord_settings)
+        help_menu.addAction(discord_act)
+        about_act = QAction("&About FD6…", self)
+        about_act.triggered.connect(self._show_about)
+        help_menu.addAction(about_act)
+
+    def _set_theme(self, theme_name: str) -> None:
+        from PySide6.QtWidgets import QApplication
+        from PySide6.QtGui import QIcon
+        apply_theme(QApplication.instance(), theme_name)
+        # Swap badge + window icon to match theme
+        bp = badge_path(badge_filename_for_theme(theme_name))
+        if bp:
+            QApplication.instance().setWindowIcon(QIcon(str(bp)))
+            self.setWindowIcon(QIcon(str(bp)))
+            if hasattr(self, "brand_banner"):
+                self.brand_banner.set_badge(bp)
+        # Recolor particle overlay with the theme's particle palette
+        if hasattr(self, "particles"):
+            pal = THEMES.get(theme_name, THEMES["Default"])
+            self.particles.set_theme_colors(
+                pal["particle_1"], pal["particle_2"], pal["particle_3"],
+            )
+        self.statusBar().showMessage(f"Theme: {theme_name}", 3000)
+
+    # -------- customizations --------
+    def _on_swap_recents_toggled(self, checked: bool) -> None:
+        from PySide6.QtCore import QSettings
+        if hasattr(self, "upload"):
+            self.upload.set_use_image_searcher(checked)
+        s = QSettings("FD6", "Forza Designer 6")
+        s.beginGroup("customizations")
+        s.setValue("swap_recents_with_image_searcher", checked)
+        s.endGroup()
+
+    # -------- suite-mode dispatch --------
+    def _apply_suite_mode(self, mode: SuiteMode) -> None:
+        """Swap the visible settings/preview panels + tweak the upload panel for the new suite."""
+        self._suite_mode = mode
+        is_ac = (mode == SuiteMode.AC)
+        # Stack swap
+        self.preview_stack.setCurrentIndex(1 if is_ac else 0)
+        self.settings_stack.setCurrentIndex(1 if is_ac else 0)
+        # Hide Forza-only JSON buttons in AC mode (AC has no JSON pipeline).
+        if hasattr(self.upload, "upload_json_btn"):
+            self.upload.upload_json_btn.setVisible(not is_ac)
+        if hasattr(self.upload, "download_json_btn"):
+            self.upload.download_json_btn.setVisible(not is_ac)
+        # Sync the radio group in the menu (in case suite changed via popup, not menu)
+        if hasattr(self, "_suite_actions"):
+            for m, act in self._suite_actions.items():
+                act.setChecked(m == mode)
+        # Status bar feedback
+        meta = SUITE_DISPLAY[mode]
+        self.statusBar().showMessage(f"Game suite: {meta['label']}", 4000)
+
+    def _on_suite_menu_selected(self, mode: SuiteMode) -> None:
+        """Customizations → Change Game Suite → <mode>."""
+        meta = SUITE_DISPLAY[mode]
+        if not meta["enabled"]:
+            return
+        if mode == self._suite_mode:
+            return
+        self._apply_suite_mode(mode)
+        save_suite_mode(mode)
+
+    def _prompt_suite_on_first_launch(self) -> None:
+        """Show the 4-tile suite picker if the user has never picked one.
+
+        Called shortly after the window is shown so the splash teardown
+        completes first. If a saved mode exists we skip the popup entirely.
+        """
+        if not self._suite_first_launch:
+            return
+        dlg = GameSuiteDialog(self, current=None)
+        result = dlg.exec()
+        if result and dlg.selected is not None:
+            self._apply_suite_mode(dlg.selected)
+            save_suite_mode(dlg.selected)
+        else:
+            # User dismissed without picking — default to Forza and save so we
+            # don't keep popping the dialog.
+            self._apply_suite_mode(SuiteMode.FORZA)
+            save_suite_mode(SuiteMode.FORZA)
+        self._suite_first_launch = False
+
+    # -------- AC export handler --------
+    def _on_ac_export_clicked(self, cfg: dict) -> None:
+        """User clicked Export to ACC. cfg comes from ACSettingsPanel._gather_export_config."""
+        from fd6.ac.livery_writer import write_acc_livery
+        from fd6.ac.slot_planner import plan_slots
+        from fd6.ac.texture_pipeline import build_decal_texture
+
+        # We need a source image — use whatever file was last uploaded.
+        if not getattr(self, "_current_path", None):
+            QMessageBox.information(
+                self, "No image",
+                "Upload an image first via 'Upload Image…' before exporting an ACC livery.",
+            )
+            return
+        if not cfg.get("car_model"):
+            QMessageBox.information(
+                self, "Pick a car",
+                "Select an ACC car model from the dropdown before exporting.",
+            )
+            return
+        try:
+            rgba, applied_aspect = build_decal_texture(
+                self._current_path,
+                target_long_edge=int(cfg["resolution"]),
+                aspect_choice=str(cfg["aspect"]),
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Texture build failed", f"{type(exc).__name__}: {exc}")
+            return
+
+        slot_filenames = plan_slots(
+            auto=bool(cfg["auto_slot"]),
+            manual_main=cfg.get("manual_main_slots"),
+            manual_sponsors=cfg.get("manual_sponsor_slots"),
+        )
+
+        # Refresh the cycling preview so the user can verify before exporting again.
+        self.ac_preview.set_slots([(s, rgba) for s in slot_filenames])
+
+        # Write to disk
+        result = write_acc_livery(
+            profile=cfg["profile"],
+            car_model=cfg["car_model"],
+            team_name=cfg["team_name"] or f"FD6_{Path(self._current_path).stem}",
+            rgba=rgba,
+            slot_filenames=slot_filenames,
+            display_name=cfg["display_name"],
+            race_number=int(cfg["race_number"]),
+            paint=cfg.get("paint"),
+        )
+        if result.success:
+            # Progress bar to 100% so the bottom strip stops sitting at 0% after
+            # a finished export — the export IS complete, the bar should reflect that.
+            self.ac_preview.progress.setValue(100)
+            self.ac_preview.status_label.setText(result.message)
+            self.statusBar().showMessage(result.message, 8000)
+            QMessageBox.information(
+                self, "Livery exported",
+                f"{result.message}\n\nFolder:\n{result.team_folder}",
+            )
+        else:
+            self.ac_preview.progress.setValue(0)
+            QMessageBox.critical(self, "Export failed", result.message)
+
+    # -------- font handler --------
+    def _on_font_pick(self, display_name: str) -> None:
+        from PySide6.QtWidgets import QApplication
+        from fd6.gui.fonts import apply_font
+        apply_font(QApplication.instance(), display_name)
+        self.statusBar().showMessage(f"Font: {display_name}", 3000)
+
+    # -------- particle handlers --------
+    def _on_particles_toggle(self, checked: bool) -> None:
+        if hasattr(self, "particles"):
+            self.particles.set_enabled(checked)
+
+    def _on_particles_count(self, count: int) -> None:
+        if hasattr(self, "particles"):
+            self.particles.set_count(count)
+            # Disabling via count==0 should also untick the Show particles action
+            self._particles_enabled_act.setChecked(self.particles.enabled() and count > 0)
+
+    def _sync_particle_count_check(self, n: int) -> None:
+        for act in self._particle_count_group.actions():
+            # Action labels are "Off (0)" or "N particles"
+            t = act.text()
+            digits = "".join(c for c in t.split()[0] if c.isdigit())
+            if digits.isdigit() and int(digits) == n:
+                act.setChecked(True)
+                return
+
+    # -------- music handlers --------
+    def _music_toggle_play(self) -> None:
+        playing = self.music.toggle_play()
+        self._music_play_act.setChecked(playing)
+
+    def _music_toggle_mute(self) -> None:
+        muted = self.music.toggle_mute()
+        self._music_mute_act.setChecked(muted)
+
+    def _music_next(self) -> None:
+        self.music.next_track()
+
+    def _music_set_volume(self, vol: float) -> None:
+        self.music.set_volume(vol)
+
+    def _on_music_state(self, playing: bool) -> None:
+        self._music_play_act.setChecked(playing)
+
+    def _on_music_muted(self, muted: bool) -> None:
+        self._music_mute_act.setChecked(muted)
+
+    def _on_music_volume(self, vol: float) -> None:
+        self._sync_volume_check(vol)
+
+    def _sync_volume_check(self, vol: float) -> None:
+        # Match closest 10%-step menu item
+        nearest = round(vol * 10) * 10
+        for act in self._music_vol_group.actions():
+            label = act.text().rstrip("%")
+            if label.isdigit() and int(label) == nearest:
+                act.setChecked(True)
+                break
+
+    def _show_about(self) -> None:
+        QMessageBox.about(
+            self,
+            "About Forza Designer 6+",
+            f"<b>Forza Designer 6+</b><br>v{fd6.__version__}<br>"
+            f"<i>For Forza Horizon 3 / 4 / 5 / 6 (FH6 build {FH6_TARGET_BUILD}) "
+            f"and Assetto Corsa Competizione</i><br><br>"
+            "Multi-game livery suite. Forza titles: live memory injection of "
+            "vinyl-group shapes (position, scale, rotation, color). Assetto "
+            "Corsa Competizione: file-based PNG livery export to the user's "
+            "Documents folder.<br><br>"
+            "<b>What's new in v0.5.5 (audio muted by default):</b><br>"
+            "• FD6 now starts <b>completely silent</b> — the splash video no "
+            "longer blasts at full volume (it used to ignore every audio "
+            "setting), and the background music starts muted for everyone, "
+            "including existing installs.<br>"
+            "• Want the tunes back? <b>View &gt; Music &gt; Mute</b> to unmute "
+            "(Ctrl+M toggles play/pause) — your choice is remembered, and the "
+            "splash now follows your music volume instead of 100%.<br><br>"
+            "<b>v0.5.4 (critical updater fix):</b><br>"
+            "• Fixed a serious bug where the updater treated an old FH6 "
+            "<i>build-number</i> release tag (<code>v354.221</code>) as app "
+            "version <code>354.221</code> — higher than <code>0.5.3</code> — and "
+            "auto-\"updated\" people DOWN to the original build. The updater now "
+            "only recognizes real X.Y.Z app versions and ignores build numbers, "
+            "so it always lands on the genuine newest release.<br>"
+            "<b>If you were downgraded, install this build manually once</b> from "
+            "the GitHub releases page — the old build's updater can't recover on "
+            "its own.<br><br>"
+            "<b>v0.5.3:</b> fixed the post-update \"Failed to load Python DLL\" "
+            "crash (clean relaunch + auto-launch after updating); update check no "
+            "longer falsely reports \"up to date\"; Rich Presence shows the "
+            "version; no re-link nag for linked users.<br>"
+            "<b>v0.5.2:</b> fixed injecting small vinyls (under ~250 shapes); "
+            "added the Experimental 2048px generation cap toggle.<br>"
+            "<b>v0.5.1:</b> built-in updater for FD6 Discord members; optional "
+            "Discord Rich Presence; refreshed banner links.<br><br>"
+            "Inspired by forza-painter (the_adawg), built on the techniques of "
+            "geometrize-lib (Sam Twidale) and Primitive (Michael Fogleman). "
+            "LiveryGroup discovery approach adapted from bvzrays/forza-painter-fh6.<br><br>"
+            "If FH6 patches and injection breaks, re-probe with "
+            "<code>python -m fd6.inject</code> and drop the corrected LiveryGroup "
+            "offsets into <code>.fd6_offsets.json</code> next to the app (no rebuild needed)."
+        )
+
+    def _refresh_inject_button(self) -> None:
+        ready = patterns_are_populated()
+        self.settings_panel.inject_btn.setEnabled(ready)
+        tip = (
+            "Phase 2 feature. Requires FH6 memory patterns. See README §Phase 2."
+            if not ready else
+            "Inject the most recent shapes into a running FH6 vinyl group."
+        )
+        self.settings_panel.inject_btn.setToolTip(tip)
+
+    def _on_files_selected(self, paths: list[Path]) -> None:
+        if self._suite_mode == SuiteMode.AC:
+            # AC mode: no queue, no auto-start. Track the most-recently
+            # uploaded file as the source for the next Export click, show it
+            # in the source pane, AND build the slot previews immediately so
+            # the user can see what'll be written before clicking Export.
+            if paths:
+                self._current_path = Path(paths[-1])
+                self.ac_preview.set_source(self._current_path)
+                self._refresh_ac_preview()
+                self.statusBar().showMessage(
+                    f"Loaded {self._current_path.name}. "
+                    "Adjust settings then click Export to write the livery.",
+                    6000,
+                )
+            return
+        # Forza path — unchanged from v0.3.0 behavior.
+        for p in paths:
+            self.queue.add(p)
+        if self._worker is None:
+            self._start_next()
+
+    def _refresh_ac_preview(self) -> None:
+        """Rebuild the AC cycling-slot preview from the current source image
+        and the settings-panel state. Called on upload and (in future) on
+        settings changes. Cheap enough at default resolutions to run inline.
+        """
+        if not getattr(self, "_current_path", None):
+            return
+        try:
+            from fd6.ac.slot_planner import plan_slots
+            from fd6.ac.texture_pipeline import build_decal_texture
+            cfg = self.ac_settings._gather_export_config()
+            rgba, applied_aspect = build_decal_texture(
+                self._current_path,
+                target_long_edge=int(cfg["resolution"]),
+                aspect_choice=str(cfg["aspect"]),
+            )
+            slot_filenames = plan_slots(
+                auto=bool(cfg["auto_slot"]),
+                manual_main=cfg.get("manual_main_slots"),
+                manual_sponsors=cfg.get("manual_sponsor_slots"),
+            )
+            self.ac_preview.set_slots([(s, rgba) for s in slot_filenames])
+            # Surface "preview is ready" so users don't think the pane is empty.
+            h, w, _ = rgba.shape
+            self.ac_preview.status_label.setText(
+                f"Preview ready — {w}×{h}  •  aspect {applied_aspect}  •  "
+                f"{len(slot_filenames)} slot(s) ready to write. "
+                f"Click Export when satisfied."
+            )
+            self.ac_preview.progress.setValue(100)
+        except Exception as exc:
+            # Preview is best-effort; never block on a failure here.
+            self.ac_preview.status_label.setText(
+                f"Preview build failed: {type(exc).__name__}: {exc}"
+            )
+            self.ac_preview.progress.setValue(0)
+
+    def _start_next(self) -> None:
+        if self._worker is not None:
+            return  # already running
+        nxt = self.queue.pop_next_queued()
+        if nxt is None:
+            self.statusBar().showMessage("Nothing queued.")
+            return
+        next_uid, next_path = nxt
+        profile = self.settings_panel.build_profile()
+        self._current_path = next_path
+        self._current_uid = next_uid
+        self._current_profile = profile
+        self.preview.set_source(next_path)
+        self.queue.set_status(next_uid, "running")
+
+        # Pull sticker-mode (transparent-background) toggle from settings panel.
+        # When ON (default), we composite transparent areas onto white before generation.
+        # When OFF, transparent areas remain transparent and don't get shapes.
+        add_white_bg = self.settings_panel.sticker_mode_cb.isChecked()
+        self._worker = GenerationWorker(next_path, profile, sticker_mode=not add_white_bg)
+        self._thread = QThread(self)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.progress.connect(self.preview.on_progress)
+        self._worker.preview.connect(self.preview.on_preview)
+        self._worker.checkpoint_written.connect(lambda p: self.statusBar().showMessage(f"Checkpoint: {p}", 4000))
+        self._worker.backend_ready.connect(lambda label: self.statusBar().showMessage(f"Compute: {label}", 8000))
+        self._worker.finished.connect(self._on_finished)
+        self._worker.error.connect(self._on_error)
+        self._thread.start()
+        self.settings_panel.set_running(True)
+        self.statusBar().showMessage(f"Generating: {next_path.name}")
+
+    def _on_finished(self, out_path: str) -> None:
+        if self._current_uid is not None:
+            # Record the JSON on this queue entry BEFORE marking done, so the
+            # row's Download JSON button (shown on "done") has a file to save.
+            self.queue.set_json_path(self._current_uid, Path(out_path))
+            self.queue.set_status(self._current_uid, "done")
+        self._last_finished_json = Path(out_path)
+        self.statusBar().showMessage(f"Saved: {out_path}", 8000)
+        # Visual cue: green-pulse the Download JSON button so the user knows it's ready
+        self.upload.mark_json_ready(self._last_finished_json)
+        self._teardown_thread()
+        # Auto-start next
+        self._start_next()
+
+    def _on_error(self, msg: str) -> None:
+        if self._current_uid is not None:
+            self.queue.set_status(self._current_uid, "error")
+        QMessageBox.critical(self, "Generation error", msg)
+        self._teardown_thread()
+
+    def _teardown_thread(self) -> None:
+        if self._thread:
+            self._thread.quit()
+            self._thread.wait(3000)
+        self._worker = None
+        self._thread = None
+        self._current_path = None
+        self._current_uid = None
+        self.settings_panel.set_running(False)
+        self.settings_panel.pause_btn.setChecked(False)
+
+    def _toggle_pause(self) -> None:
+        if not self._worker:
+            return
+        paused = self.settings_panel.pause_btn.isChecked()
+        self._worker.set_pause(paused)
+        self.statusBar().showMessage("Paused." if paused else "Resumed.", 3000)
+
+    def _stop_current(self) -> None:
+        if self._worker:
+            self._worker.stop()
+
+    def _on_inject_clicked(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+        # If a JSON is already loaded into preview, inject that. Else prompt.
+        if self._loaded_json_path and self._loaded_json_path.exists():
+            self._on_inject_json_path(self._loaded_json_path)
+            return
+        json_path, _ = QFileDialog.getOpenFileName(
+            self, "Pick shapes JSON to inject", "", "FD6 shapes (*.json);;All files (*)"
+        )
+        if json_path:
+            self._on_inject_json_path(Path(json_path))
+
+    def _on_json_loaded_for_preview(self, json_path: Path) -> None:
+        """User clicked Upload JSON -> load the file, render shapes onto the preview pane.
+        Does NOT inject. User must click Inject into FH6 after to actually push to game.
+        """
+        from fd6.io.exporter import load_json
+        from fd6.shapegen.render import render_shapes
+        try:
+            doc = load_json(str(json_path))
+            shapes = doc.materialize_shapes()
+        except Exception as exc:
+            QMessageBox.critical(self, "Load failed", f"{type(exc).__name__}: {exc}")
+            return
+        w, h = doc.image_size if doc.image_size and doc.image_size[0] > 0 else (1200, 800)
+        self.statusBar().showMessage(f"Rendering preview of {len(shapes)} shapes from {json_path.name}...")
+        # Render with transparent backdrop when EITHER:
+        #   - the JSON was generated in sticker mode (sticker_mode=True in file), OR
+        #   - the current "Add white background to transparent images" toggle is
+        #     UNCHECKED at upload time — the user's current intent overrides the
+        #     stored flag, which also covers legacy JSONs that pre-date the field.
+        white_bg_checked = self.settings_panel.sticker_mode_cb.isChecked()
+        render_transparent = bool(getattr(doc, "sticker_mode", False)) or not white_bg_checked
+        canvas = render_shapes(shapes, w, h, background=(255, 255, 255),
+                               transparent_bg=render_transparent)
+        self.preview.source_view.clear_image()
+        self.preview.preview_view.set_numpy(canvas)
+        self.preview.status_label.setText(
+            f"Loaded {len(shapes)} shapes from '{json_path.name}'  •  {w}x{h}  •  ready to inject"
+        )
+        self.preview.progress.setValue(100)
+        self._loaded_json_path = json_path
+        self.statusBar().showMessage(
+            f"Preview ready. Click 'Inject into FH6' to push these shapes into the game.", 8000
+        )
+
+    def _on_inject_json_path(self, json_path: Path) -> None:
+        """Inject the given FD6 shapes JSON into the running FH6 vinyl group.
+        Opens a modal in-progress dialog (warns user not to touch FH6) and runs the
+        injection in a background QThread. Status bar mirrors the same updates.
+        """
+        from fd6.inject import patterns_are_populated
+        from fd6.gui.inject_worker import InjectionWorker
+        from fd6.gui.inject_dialog import InjectionDialog
+
+        if not patterns_are_populated():
+            QMessageBox.warning(
+                self, "FH6 Injection",
+                "Patterns file is incomplete. Use FH6 → Discovery Workflow… to populate it."
+            )
+            return
+
+        if getattr(self, "_inject_thread", None) is not None:
+            QMessageBox.information(self, "Inject in progress", "An injection is already running. Wait for it to finish.")
+            return
+
+        target_key = self.settings_panel.selected_target_profile_key()
+        self._inject_worker = InjectionWorker(json_path, profile_key=target_key)
+        self._inject_thread = QThread(self)
+        self._inject_worker.moveToThread(self._inject_thread)
+
+        # Modal blocking dialog — labelled with the selected target so users
+        # see FH4 / FH5 / FH3 instead of always reading "FH6".
+        from fd6.inject.game_profiles import get_profile, default_profile
+        try:
+            game_label = get_profile(target_key).label
+        except ValueError:
+            game_label = default_profile().label
+        self._inject_dialog = InjectionDialog(self, json_name=json_path.name, game_label=game_label)
+
+        # Wire worker → both dialog and status bar
+        self._inject_worker.scan_progress.connect(self._inject_dialog.on_scan_progress)
+        self._inject_worker.write_progress.connect(self._inject_dialog.on_write_progress)
+        self._inject_worker.status.connect(self._inject_dialog.on_status)
+        self._inject_worker.done.connect(self._inject_dialog.on_done)
+
+        self._inject_worker.scan_progress.connect(self._on_inject_scan_progress)
+        self._inject_worker.write_progress.connect(self._on_inject_write_progress)
+        self._inject_worker.status.connect(self._on_inject_status)
+        self._inject_worker.done.connect(self._on_inject_done)
+
+        self._inject_thread.started.connect(self._inject_worker.run)
+        self._set_inject_status("Starting injection…", "info")
+        self._inject_thread.start()
+        # Show modal — blocks until close button enabled + user clicks Close
+        self._inject_dialog.exec()
+
+    def _set_inject_status(self, message: str, severity: str = "info") -> None:
+        """Color-coded persistent status line at the bottom of the main window.
+        severity ∈ {info, success, warning, error}.
+        """
+        color = {
+            "info":    "#cccccc",
+            "success": "#2ecc71",
+            "warning": "#f1c40f",
+            "error":   "#ff4d4d",
+        }.get(severity, "#cccccc")
+        bg = {
+            "info":    "#1f1f1f",
+            "success": "#0c2417",
+            "warning": "#2a2410",
+            "error":   "#2a1414",
+        }.get(severity, "#1f1f1f")
+        # Use the QMainWindow's status bar — temporary text disappears after a timeout for success,
+        # but for ongoing/error stays put.
+        sb = self.statusBar()
+        sb.setStyleSheet(f"QStatusBar {{ background: {bg}; color: {color}; font-weight: bold; }}")
+        sb.showMessage(message, 0 if severity in ("info", "error", "warning") else 10000)
+
+    def _on_inject_status(self, message: str, severity: str) -> None:
+        self._set_inject_status(message, severity)
+
+    def _on_inject_scan_progress(self, scanned: int, total: int, hits: int) -> None:
+        pct = int(round(100 * scanned / max(1, total)))
+        try:
+            from fd6.inject.game_profiles import get_profile
+            target_key = self.settings_panel.selected_target_profile_key()
+            short = get_profile(target_key).label.replace(" (BETA)", "")
+            # Compress "Forza Horizon N" → "FHN" for tight status bar text.
+            if short.startswith("Forza Horizon ") and short[len("Forza Horizon "):].strip().isdigit():
+                short = "FH" + short[len("Forza Horizon "):].strip()
+        except Exception:
+            short = "FH6"
+        self._set_inject_status(
+            f"Scanning {short} memory… {scanned}/{total} regions ({pct}%) — {hits} shape structs found so far",
+            "info",
+        )
+
+    def _on_inject_write_progress(self, written: int, total: int) -> None:
+        pct = int(round(100 * written / max(1, total)))
+        self._set_inject_status(f"Writing shapes… {written}/{total} ({pct}%)", "info")
+
+    def _on_inject_done(self) -> None:
+        if self._inject_thread:
+            self._inject_thread.quit()
+            self._inject_thread.wait(3000)
+        self._inject_worker = None
+        self._inject_thread = None
+        self._inject_dialog = None
+
+    def _on_download_json(self) -> None:
+        """Save (copy) the most-recent / currently-previewed shapes JSON."""
+        if not self._last_finished_json or not self._last_finished_json.exists():
+            QMessageBox.information(
+                self, "No JSON yet",
+                "No completed generation yet. Generate from an image first (or use Upload JSON to load an existing one)."
+            )
+            return
+        self._save_json_copy(self._last_finished_json)
+
+    def _on_queue_download_json(self, uid: int) -> None:
+        """Save a SPECIFIC finished queue item's JSON (per-row Download button)."""
+        json_path = self.queue.json_path_for(uid)
+        if not json_path or not Path(json_path).exists():
+            QMessageBox.information(
+                self, "No JSON for this item",
+                "This queue item hasn't finished generating, or its JSON is missing."
+            )
+            return
+        self._save_json_copy(Path(json_path))
+
+    def _save_json_copy(self, src: Path) -> None:
+        """Prompt for a destination and copy `src` there."""
+        from PySide6.QtWidgets import QFileDialog
+        import shutil
+        dest, _ = QFileDialog.getSaveFileName(
+            self, "Save shapes JSON as…", src.name, "FD6 shapes (*.json);;All files (*)"
+        )
+        if not dest:
+            return
+        try:
+            shutil.copy2(str(src), dest)
+            self.statusBar().showMessage(f"Exported to {dest}", 6000)
+        except Exception as exc:
+            QMessageBox.critical(self, "Save failed", f"{type(exc).__name__}: {exc}")
+
+    def _show_fh6_status(self) -> None:
+        from fd6.inject import discovery as disc
+        from fd6.inject.patterns_io import load_patterns, has_usable_patterns
+
+        pid = disc.find_game_pid()
+        if pid is None:
+            game_line = "forzahorizon6.exe: <b>NOT RUNNING</b>"
+        else:
+            info = disc.process_summary(pid)
+            game_line = (
+                f"forzahorizon6.exe PID <b>{info.pid}</b><br>"
+                f"&nbsp;&nbsp;committed regions: {info.region_count}<br>"
+                f"&nbsp;&nbsp;private+writable bytes: {info.private_writable_bytes:,}<br>"
+                f"&nbsp;&nbsp;image bytes: {info.image_bytes:,}"
+            )
+        pf = load_patterns()
+        QMessageBox.information(
+            self,
+            "FH6 Status",
+            f"{game_line}<br><br>"
+            f"<b>Patterns file</b><br>"
+            f"&nbsp;&nbsp;patterns: {len(pf.patterns)}<br>"
+            f"&nbsp;&nbsp;shape_struct.stride: {pf.shape_struct.stride_bytes}<br>"
+            f"&nbsp;&nbsp;shape_struct.fields: {len(pf.shape_struct.fields)}<br>"
+            f"&nbsp;&nbsp;injector ready: <b>{has_usable_patterns(pf)}</b>"
+        )
+
+    def _show_discovery_help(self) -> None:
+        QMessageBox.information(
+            self,
+            "FH6 Discovery Workflow",
+            "<p>Discovery is done from the command line, run from the FD6 project root:</p>"
+            "<pre>"
+            "python -m fd6.inject status\n"
+            "python -m fd6.inject scan-float &lt;known sphere coord&gt;\n"
+            "python -m fd6.inject narrow &lt;moved coord&gt;   (repeat until ~1 hit)\n"
+            "python -m fd6.inject dump &lt;addr&gt; 256\n"
+            "python -m fd6.inject find-refs &lt;struct_addr&gt;\n"
+            "python -m fd6.inject save-pattern shape_array_ref '&lt;AOB&gt;' --offset 3\n"
+            "python -m fd6.inject test-injector\n"
+            "</pre>"
+            "<p>The interactive parts (initial float discovery, struct field identification) "
+            "are done with an external memory-scanning tool of your choice — FD6 only consumes "
+            "the resulting AOB pattern and offsets.</p>"
+            "<p>Use FH6 → Reload Patterns once you've saved a usable pattern; the Inject "
+            "button will then enable.</p>"
+        )
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "brand_banner") and self.brand_banner is not None:
+            self.brand_banner.reposition()
+
+    def showEvent(self, event) -> None:
+        """Fire the first-launch suite picker AFTER the splash hands off to us.
+
+        Constructing MainWindow happens during the splash, but show() is only
+        called once the splash teardown completes. Triggering the popup
+        before that would render it on top of the splash and prevent the user
+        from skipping the video. By waiting for showEvent we guarantee the
+        main window is the active foreground surface.
+        """
+        super().showEvent(event)
+        if (
+            self._suite_first_launch
+            and not self._suite_popup_shown_this_session
+        ):
+            self._suite_popup_shown_this_session = True
+            # One event-loop tick of delay so the window has fully painted
+            # before the modal blocks it — avoids a black-frame flash.
+            QTimer.singleShot(0, self._prompt_suite_on_first_launch)
+        # NOTE: the welcome panel + update check are triggered DETERMINISTICALLY
+        # from app.py's post-splash callback via run_startup_flow(), not here —
+        # showEvent timing proved unreliable in the frozen --windowed build
+        # (a swallowed exception/timing race left the panel never showing).
+        if hasattr(self, "particles") and self.particles is not None:
+            self.particles.reposition()
+            self._sync_particle_exclude_rect()
+            # Keep brand banner on top of the particle layer so it stays clickable
+            if hasattr(self, "brand_banner"):
+                self.brand_banner.raise_()
+
+    def _compute_particle_exclude_rect(self):
+        """Live rect provider: returns the preview panel's current rect in
+        MainWindow client coords (== the particle overlay's coord space)."""
+        if not hasattr(self, "preview") or self.preview is None:
+            return None
+        if self.preview.width() <= 0 or self.preview.height() <= 0:
+            return None
+        from PySide6.QtCore import QRect
+        top_left = self.preview.mapTo(self, self.preview.rect().topLeft())
+        return QRect(top_left, self.preview.size())
+
+    def _sync_particle_exclude_rect(self) -> None:
+        """Push the current exclude rect once (cached fallback path)."""
+        if not hasattr(self, "particles") or self.particles is None:
+            return
+        excl = self._compute_particle_exclude_rect()
+        if excl is not None:
+            self.particles.set_exclude_rect(excl)
+
+    def closeEvent(self, event) -> None:
+        # Tear down Discord Rich Presence so it doesn't linger after exit.
+        try:
+            if getattr(self, "_rich_presence", None) is not None:
+                self._rich_presence.stop()
+        except Exception:
+            pass
+        if self._worker:
+            self._worker.stop()
+            if self._thread:
+                self._thread.quit()
+                self._thread.wait(3000)
+        # Stop any pending image-search webview cleanly (lazy-init: may be None)
+        try:
+            if (hasattr(self, "upload")
+                    and getattr(self.upload, "image_search", None) is not None):
+                self.upload.image_search.shutdown()
+        except Exception:
+            pass
+        super().closeEvent(event)
+
+
+===== FILE: fd6/gui/inject_dialog.py =====
+"""Modal dialog shown during an active injection (FH6 / FH5 / FH4 / FH3).
+
+Blocks the rest of the FD6 GUI, can't be closed by the user, and includes a
+prominent professional warning that editing the game's vinyl group during the
+operation will cause the injection to fail.
+
+The dialog auto-closes when the worker emits its terminal status (success/warning/error
+followed by `done`).
+"""
+
+from __future__ import annotations
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import (
+    QDialog, QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout
+)
+
+
+def _short_game_label(label: str) -> str:
+    """Compress 'Forza Horizon N' to 'FHN' for tight UI text. Other labels pass through."""
+    if label.startswith("Forza Horizon "):
+        suffix = label[len("Forza Horizon "):].strip()
+        if suffix.isdigit():
+            return f"FH{suffix}"
+    return label
+
+
+SEVERITY_COLORS = {
+    "info":    ("#cccccc", "#1f1f1f"),
+    "success": ("#2ecc71", "#0c2417"),
+    "warning": ("#f1c40f", "#2a2410"),
+    "error":   ("#ff4d4d", "#2a1414"),
+}
+
+
+class InjectionDialog(QDialog):
+    """Modal injection-in-progress dialog. Caller wires our slots to InjectionWorker signals."""
+
+    def __init__(self, parent=None, json_name: str = "", game_label: str = "Forza Horizon 6") -> None:
+        super().__init__(parent)
+        # Strip "(BETA)" suffix from the label for cleaner dialog text — beta status
+        # is already surfaced as a yellow warning banner from the worker.
+        self._clean_label = game_label.replace(" (BETA)", "")
+        self._short_label = _short_game_label(self._clean_label)
+        self.setWindowTitle(f"FD6 → {self._clean_label} Injection")
+        # Block parent, no close button, no help button
+        self.setModal(True)
+        flags = self.windowFlags()
+        flags &= ~Qt.WindowCloseButtonHint
+        flags &= ~Qt.WindowContextHelpButtonHint
+        flags |= Qt.WindowTitleHint
+        self.setWindowFlags(flags)
+        self.setMinimumWidth(520)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 20, 20, 16)
+        root.setSpacing(12)
+
+        # Header
+        header = QLabel(f"Injecting shapes into {self._clean_label}")
+        hf = QFont(); hf.setBold(True); hf.setPointSize(13)
+        header.setFont(hf)
+        root.addWidget(header)
+        if json_name:
+            sub = QLabel(f"Source: {json_name}")
+            sub.setStyleSheet("color: #888;")
+            root.addWidget(sub)
+
+        # Stage label + progress bar
+        self.stage_label = QLabel("Preparing…")
+        self.stage_label.setStyleSheet("color: #cccccc;")
+        self.progress = QProgressBar(self)
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.setTextVisible(True)
+        root.addWidget(self.stage_label)
+        root.addWidget(self.progress)
+
+        # Detail line (e.g., "324/1842 regions, 47 shape structs found")
+        self.detail_label = QLabel("")
+        self.detail_label.setStyleSheet("color: #999; font-size: 11px;")
+        root.addWidget(self.detail_label)
+
+        # Warning panel — prominent, never goes away during the op
+        warn_box = QFrame(self)
+        warn_box.setStyleSheet(
+            "QFrame { background: #2a1f0a; border: 1px solid #b07a00; border-radius: 6px; }"
+            "QLabel { color: #f1c40f; }"
+        )
+        wl = QVBoxLayout(warn_box)
+        wl.setContentsMargins(14, 10, 14, 10)
+        warn_title = QLabel(f"⚠  Do not modify {self._clean_label} during injection")
+        wtf = QFont(); wtf.setBold(True); wtf.setPointSize(11)
+        warn_title.setFont(wtf)
+        wl.addWidget(warn_title)
+        warn_body = QLabel(
+            f"Editing, adding, deleting, or moving any vinyl shape in {self._short_label} while this "
+            "operation is running will cause the in-game vinyl group's memory to be "
+            "reallocated mid-write, which will fail the injection. Please leave the "
+            "vinyl editor untouched until this dialog closes.\n\n"
+            "After injection completes: the lowest layer indices in your vinyl group "
+            "(typically layers 1–10) may contain placeholder geometry left over from "
+            "the original template and can occasionally render in front of the "
+            "injected artwork. If you notice unexpected shapes obscuring your design, "
+            f"open the {self._short_label} layer panel and delete, hide, or reposition the affected "
+            "low-index layers as needed."
+        )
+        warn_body.setWordWrap(True)
+        wbf = QFont(); wbf.setPointSize(9)
+        warn_body.setFont(wbf)
+        wl.addWidget(warn_body)
+        root.addWidget(warn_box)
+
+        # Status line at bottom (colored per severity)
+        self.status_label = QLabel("Starting…")
+        slf = QFont(); slf.setBold(True)
+        self.status_label.setFont(slf)
+        self.status_label.setWordWrap(True)
+        root.addWidget(self.status_label)
+        self._apply_severity_to_status("info")
+
+        # Close button — disabled until injection ends
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        self.close_btn = QPushButton("Close")
+        self.close_btn.setEnabled(False)
+        self.close_btn.clicked.connect(self.accept)
+        btn_row.addWidget(self.close_btn)
+        root.addLayout(btn_row)
+
+        self._final_severity: str | None = None
+
+    # ------------------------------------------------------- Worker signal handlers
+
+    def on_status(self, message: str, severity: str) -> None:
+        self.status_label.setText(message)
+        self._apply_severity_to_status(severity)
+        if severity in ("success", "warning", "error"):
+            self._final_severity = severity
+
+    def on_scan_progress(self, scanned: int, total: int, hits: int) -> None:
+        # Scan phase is treated as 0–50% of overall; write phase is 50–100%
+        pct = int(round(50 * scanned / max(1, total)))
+        self.progress.setValue(pct)
+        # The scan walks the biggest memory regions first, so it starts slow and
+        # speeds up as it goes — tell the user so the early crawl doesn't look
+        # like a freeze.
+        self.stage_label.setText(
+            f"Stage 1 of 2 — Scanning {self._short_label} memory "
+            "(starts slow, gets faster as it goes)"
+        )
+        self.detail_label.setText(
+            f"{scanned}/{total} regions  •  {hits} strict LiveryGroup candidate(s) found"
+        )
+
+    def on_write_progress(self, written: int, total: int) -> None:
+        pct = 50 + int(round(50 * written / max(1, total)))
+        self.progress.setValue(pct)
+        self.stage_label.setText("Stage 2 of 2 — Writing shapes")
+        self.detail_label.setText(f"{written}/{total} shapes written")
+
+    def on_done(self) -> None:
+        # Allow user to dismiss now
+        self.close_btn.setEnabled(True)
+        if self._final_severity == "success":
+            self.progress.setValue(100)
+        # Brief styling cue: pulse the Close button
+        self.close_btn.setDefault(True)
+        self.close_btn.setFocus()
+
+    # ------------------------------------------------------- internals
+
+    def _apply_severity_to_status(self, severity: str) -> None:
+        fg, bg = SEVERITY_COLORS.get(severity, SEVERITY_COLORS["info"])
+        self.status_label.setStyleSheet(
+            f"QLabel {{ color: {fg}; background: {bg}; padding: 8px; border-radius: 4px; }}"
+        )
+
+    def keyPressEvent(self, event) -> None:
+        # Block Esc-to-close while the operation is running
+        if event.key() == Qt.Key_Escape and not self.close_btn.isEnabled():
+            return
+        super().keyPressEvent(event)
+
+    def closeEvent(self, event) -> None:
+        # Block window-close if the operation hasn't terminated
+        if not self.close_btn.isEnabled():
+            event.ignore()
+            return
+        super().closeEvent(event)
+
+
+===== FILE: fd6/io/json_schema.py =====
+from __future__ import annotations
+
+from dataclasses import dataclass, field, asdict
+from datetime import datetime, timezone
+from typing import Iterable
+
+from fd6.shapegen.shapes import Shape, shape_from_json
+
+FD6_FORMAT = "fd6.shapes"
+FD6_VERSION = 1
+
+
+@dataclass
+class FD6Document:
+    """v1 of the FD6 shape JSON document. See README for schema details."""
+
+    format: str = FD6_FORMAT
+    version: int = FD6_VERSION
+    source_image: str = ""
+    image_size: tuple[int, int] = (0, 0)  # (width, height)
+    shape_count: int = 0
+    generated_at: str = ""
+    profile: str = ""
+    # True when the JSON was generated with sticker mode (transparent backdrop —
+    # "Add white background to transparent images" was UNCHECKED). Default False
+    # for backwards compat with older JSONs that pre-date this field. Affects
+    # how the GUI re-renders the preview on Upload JSON: sticker JSONs get a
+    # transparent preview, non-sticker JSONs get a white canvas as before.
+    sticker_mode: bool = False
+    shapes: list[dict] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        d["image_size"] = list(self.image_size)
+        return d
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "FD6Document":
+        fmt = data.get("format")
+        if fmt != FD6_FORMAT:
+            raise ValueError(f"Unsupported document format: {fmt!r} (expected {FD6_FORMAT!r})")
+        ver = data.get("version")
+        if ver != FD6_VERSION:
+            raise ValueError(f"Unsupported document version: {ver!r} (expected {FD6_VERSION})")
+        size = data.get("image_size", [0, 0])
+        return cls(
+            format=fmt,
+            version=ver,
+            source_image=str(data.get("source_image", "")),
+            image_size=(int(size[0]), int(size[1])),
+            shape_count=int(data.get("shape_count", len(data.get("shapes", [])))),
+            generated_at=str(data.get("generated_at", "")),
+            profile=str(data.get("profile", "")),
+            sticker_mode=bool(data.get("sticker_mode", False)),
+            shapes=list(data.get("shapes", [])),
+        )
+
+    def materialize_shapes(self) -> list[Shape]:
+        return [shape_from_json(s) for s in self.shapes]
+
+    @classmethod
+    def from_engine(
+        cls,
+        source_image: str,
+        image_size: tuple[int, int],
+        shapes: Iterable[Shape],
+        profile_name: str = "",
+        sticker_mode: bool = False,
+    ) -> "FD6Document":
+        shape_list = [s.to_json() for s in shapes]
+        return cls(
+            format=FD6_FORMAT,
+            version=FD6_VERSION,
+            source_image=source_image,
+            image_size=image_size,
+            shape_count=len(shape_list),
+            generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            profile=profile_name,
+            sticker_mode=sticker_mode,
+            shapes=shape_list,
+        )
+
+
+===== FILE: fd6/io/exporter.py =====
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+from pathlib import Path
+
+from fd6.io.json_schema import FD6Document
+
+
+def save_json(doc: FD6Document, path: str | Path) -> Path:
+    """Atomic write: serialize to a sibling tempfile then rename."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = doc.to_dict()
+    fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp_name, path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+    return path
+
+
+def load_json(path: str | Path) -> FD6Document:
+    path = Path(path)
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return FD6Document.from_dict(data)
+
+
+===== FILE: fd6/app.py =====
+import sys
+from pathlib import Path
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import QApplication
+from fd6.gui.main_window import MainWindow
+from fd6.gui.splash import maybe_show_splash
+
+
+def main() -> int:
+    from fd6.gui.startup_log import log, reset
+    reset(); log("main() start")
+    app = QApplication(sys.argv)
+    app.setApplicationName("Forza Designer 6")
+    app.setOrganizationName("FD6")
+    # Load bundled TTFs and apply the user's saved font choice (or the
+    # "Default" pseudo-family = Segoe UI Variable → Segoe UI → sans fallback).
+    from fd6.gui.fonts import load_bundled_fonts, apply_font, saved_font_name
+    load_bundled_fonts()
+    apply_font(app, saved_font_name())
+    # Window icon matches the current theme's badge (Default → Pink)
+    from fd6.gui.brand_banner import badge_path
+    from fd6.gui.themes import badge_filename_for_theme, saved_theme_name
+    bp = badge_path(badge_filename_for_theme(saved_theme_name()))
+    if bp:
+        app.setWindowIcon(QIcon(str(bp)))
+
+    # Apply persisted theme before constructing MainWindow so styling applies cleanly
+    from fd6.gui.themes import apply_theme, saved_theme_name
+    apply_theme(app, saved_theme_name())
+
+    log("constructing MainWindow")
+    win = MainWindow()
+    log("MainWindow constructed")
+
+    def show_main():
+        log("show_main()")
+        win.show()
+        win.raise_()
+        win.activateWindow()
+        log("window shown")
+        # Defer music start by one event-loop tick so any splash teardown
+        # finishes first (two simultaneous QMediaPlayer streams during splash
+        # close was crashing the app).
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(150, win.start_music)
+        # Deterministically run the post-splash startup flow (welcome panel /
+        # update check). Triggered here rather than in showEvent because the
+        # frozen --windowed build proved unreliable at firing it from showEvent.
+        def _safe_startup():
+            try:
+                win.run_startup_flow()
+            except Exception as exc:
+                log(f"run_startup_flow EXCEPTION: {type(exc).__name__}: {exc}")
+        QTimer.singleShot(350, _safe_startup)
+
+    # Show splash if SplashScreen.mp4 is present, then open main window when video ends or user clicks/keypress.
+    # If no splash file, show main window immediately.
+    splash = maybe_show_splash(show_main)
+    if splash is None:
+        # Already shown by callback above
+        pass
+
+    return app.exec()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
+===== FILE: fd6/suite.py =====
+"""Game-suite dispatch — which family of games FD6 is currently targeting.
+
+FD6's first three game families share the UI shell but diverge on:
+  - which generation pipeline to run (Forza uses geometrize, AC uses raster only)
+  - which target dropdown contents to show
+  - which "Inject" button label / output behavior to use
+
+The active suite is tracked here, persisted via QSettings between sessions,
+and consumed by main_window.py to swap subpanels in/out. Strict isolation
+rule: fd6.suite must NEVER import from fd6.inject, fd6.ac, fd6.shapegen,
+fd6.nfs, or fd6.crew — those modules import FROM here, not the other way.
+"""
+
+from __future__ import annotations
+
+from enum import Enum
+
+from PySide6.QtCore import QSettings
+
+
+class SuiteMode(str, Enum):
+    """Top-level game-family selection. String-valued so QSettings round-trips cleanly."""
+
+    FORZA = "forza"
+    AC = "ac"
+    NFS = "nfs"           # placeholder, not yet implemented
+    CREW = "crew"         # placeholder, not yet implemented
+
+
+# Display metadata for each suite — used by the suite-picker dialog and the
+# Customizations submenu. Order matters: production-ready suites first.
+SUITE_DISPLAY = {
+    SuiteMode.FORZA: {
+        "label": "Forza Titles",
+        "subtitle": "FH3 / FH4 / FH5 / FH6",
+        "enabled": True,
+    },
+    SuiteMode.AC: {
+        "label": "Assetto Corsa Titles",
+        "subtitle": "ACC fully supported; ACE / AC Rally / AC coming soon",
+        "enabled": True,
+    },
+    SuiteMode.NFS: {
+        "label": "Need for Speed Titles",
+        "subtitle": "Heat / Unbound — coming in a future release",
+        "enabled": False,
+    },
+    SuiteMode.CREW: {
+        "label": "The Crew: Motorfest",
+        "subtitle": "Coming in a future release",
+        "enabled": False,
+    },
+}
+
+
+_SETTINGS_GROUP = "suite_mode"
+_KEY_LAST_SELECTED = "last_selected"
+
+
+def saved_suite_mode() -> SuiteMode | None:
+    """Read the user's last-selected suite from QSettings.
+
+    Returns None on first-ever launch (no value saved yet); callers should
+    treat that as "show the suite-picker popup on first image upload".
+    """
+    s = QSettings("FD6", "Forza Designer 6")
+    s.beginGroup(_SETTINGS_GROUP)
+    try:
+        raw = s.value(_KEY_LAST_SELECTED, "")
+    finally:
+        s.endGroup()
+    if not raw:
+        return None
+    try:
+        return SuiteMode(str(raw))
+    except ValueError:
+        # Stored value no longer maps to a known suite (downgrade scenario).
+        # Treat as unset so the popup re-asks.
+        return None
+
+
+def save_suite_mode(mode: SuiteMode) -> None:
+    """Persist the user's selection so the next session opens in the same mode."""
+    s = QSettings("FD6", "Forza Designer 6")
+    s.beginGroup(_SETTINGS_GROUP)
+    try:
+        s.setValue(_KEY_LAST_SELECTED, mode.value)
+    finally:
+        s.endGroup()
